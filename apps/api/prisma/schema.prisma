@@ -1,0 +1,347 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("VENDEDOR")
+  active    Boolean  @default(true)
+  avatar    String?
+  storeId   String?
+  store     Store?   @relation(fields: [storeId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignedLeads         Lead[]         @relation("AssignedLeads")
+  assignedConversations Conversation[] @relation("AssignedConversations")
+  automationLogs        AutomationLog[]
+  createdFlows          Flow[]
+  FlowExecution         FlowExecution[]
+
+  @@map("users")
+}
+
+model Store {
+  id        String   @id @default(cuid())
+  name      String
+  region    String?
+  phone     String?
+  email     String?
+  address   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  leads         Lead[]
+  conversations Conversation[]
+  zapiConfig    ZapiConfig?
+  aiConfig      AiConfig?
+
+  @@map("stores")
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String   @unique
+  email     String?
+  avatar    String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leads         Lead[]
+  conversations Conversation[]
+
+  @@map("contacts")
+}
+
+model Lead {
+  id             String   @id @default(cuid())
+  name           String
+  phone          String
+  source         String?
+  region         String?
+  interest       String?
+  temperature    String   @default("FRIO")
+  score          Int      @default(0)
+  status         String   @default("NOVO")
+  priority       Int      @default(0)
+  notes          String?
+  assignedUserId String?
+  storeId        String?
+  contactId      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assignedUser   User?              @relation("AssignedLeads", fields: [assignedUserId], references: [id])
+  store          Store?             @relation(fields: [storeId], references: [id])
+  contact        Contact?           @relation(fields: [contactId], references: [id])
+  tags           LeadTag[]
+  customValues   CustomFieldValue[]
+  conversations  Conversation[]
+  automationLogs AutomationLog[]
+  flowExecutions FlowExecution[]
+
+  @@map("leads")
+}
+
+model Conversation {
+  id             String   @id @default(cuid())
+  contactId      String
+  leadId         String?
+  storeId        String?
+  status         String   @default("ABERTA")
+  aiEnabled      Boolean  @default(true)
+  mode           String   @default("IA_AUTOMATICA")
+  assignedUserId String?
+  lastMessageAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contact       Contact       @relation(fields: [contactId], references: [id])
+  lead          Lead?         @relation(fields: [leadId], references: [id])
+  store         Store?        @relation(fields: [storeId], references: [id])
+  assignedUser  User?         @relation("AssignedConversations", fields: [assignedUserId], references: [id])
+  messages      Message[]
+  automationLogs AutomationLog[]
+  flowExecutions FlowExecution[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id                String   @id @default(cuid())
+  conversationId    String
+  direction         String
+  type              String   @default("TEXT")
+  content           String
+  providerMessageId String?
+  metadata          String?
+  fromFlow          Boolean  @default(false)
+  flowNodeId        String?
+  read              Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@map("messages")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("#6366f1")
+  createdAt DateTime @default(now())
+
+  leads LeadTag[]
+
+  @@map("tags")
+}
+
+model LeadTag {
+  leadId    String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([leadId, tagId])
+  @@map("lead_tags")
+}
+
+model CustomField {
+  id        String   @id @default(cuid())
+  name      String
+  key       String   @unique
+  type      String   @default("text")
+  options   String?
+  required  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  values CustomFieldValue[]
+
+  @@map("custom_fields")
+}
+
+model CustomFieldValue {
+  id            String   @id @default(cuid())
+  customFieldId String
+  leadId        String
+  value         String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  customField CustomField @relation(fields: [customFieldId], references: [id])
+  lead        Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([customFieldId, leadId])
+  @@map("custom_field_values")
+}
+
+model AutomationLog {
+  id             String   @id @default(cuid())
+  type           String
+  description    String
+  data           String?
+  conversationId String?
+  leadId         String?
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+  lead         Lead?         @relation(fields: [leadId], references: [id])
+  user         User?         @relation(fields: [userId], references: [id])
+
+  @@map("automation_logs")
+}
+
+model AiConfig {
+  id           String   @id @default(cuid())
+  storeId      String?  @unique
+  provider     String   @default("openai")
+  model        String   @default("gpt-4o-mini")
+  temperature  Float    @default(0.7)
+  maxTokens    Int      @default(500)
+  systemPrompt String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store Store? @relation(fields: [storeId], references: [id])
+
+  @@map("ai_configs")
+}
+
+model ZapiConfig {
+  id            String   @id @default(cuid())
+  storeId       String?  @unique
+  instanceId    String
+  token         String
+  clientToken   String?
+  baseUrl       String   @default("https://api.z-api.io")
+  webhookSecret String?
+  active        Boolean  @default(true)
+  connected     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  store Store? @relation(fields: [storeId], references: [id])
+
+  @@map("zapi_configs")
+}
+
+// ─── Flows ───────────────────────────────────────────────────────────────────
+
+model Flow {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  active      Boolean  @default(false)
+  version     Int      @default(1)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy  User            @relation(fields: [createdById], references: [id])
+  nodes      FlowNode[]
+  edges      FlowEdge[]
+  triggers   FlowTrigger[]
+  executions FlowExecution[]
+
+  @@map("flows")
+}
+
+model FlowNode {
+  id        String   @id @default(cuid())
+  flowId    String
+  type      String
+  title     String?
+  config    String   @default("{}")
+  positionX Float    @default(0)
+  positionY Float    @default(0)
+  createdAt DateTime @default(now())
+
+  flow           Flow                @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  sourceEdges    FlowEdge[]          @relation("SourceNode")
+  targetEdges    FlowEdge[]          @relation("TargetNode")
+  executionSteps FlowExecutionStep[]
+
+  @@map("flow_nodes")
+}
+
+model FlowEdge {
+  id           String   @id @default(cuid())
+  flowId       String
+  sourceNodeId String
+  targetNodeId String
+  condition    String?
+  label        String?
+  createdAt    DateTime @default(now())
+
+  flow       Flow     @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  sourceNode FlowNode @relation("SourceNode", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  targetNode FlowNode @relation("TargetNode", fields: [targetNodeId], references: [id], onDelete: Cascade)
+
+  @@map("flow_edges")
+}
+
+model FlowTrigger {
+  id        String   @id @default(cuid())
+  flowId    String
+  type      String
+  value     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  flow Flow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@map("flow_triggers")
+}
+
+model FlowExecution {
+  id             String    @id @default(cuid())
+  flowId         String
+  conversationId String?
+  leadId         String?
+  userId         String?
+  status         String    @default("RUNNING")
+  currentNodeId  String?
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  error          String?
+
+  flow         Flow               @relation(fields: [flowId], references: [id])
+  conversation Conversation?      @relation(fields: [conversationId], references: [id])
+  lead         Lead?              @relation(fields: [leadId], references: [id])
+  user         User?              @relation(fields: [userId], references: [id])
+  steps        FlowExecutionStep[]
+
+  @@map("flow_executions")
+}
+
+model FlowExecutionStep {
+  id          String   @id @default(cuid())
+  executionId String
+  nodeId      String
+  status      String
+  input       String?
+  output      String?
+  error       String?
+  createdAt   DateTime @default(now())
+
+  execution FlowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  node      FlowNode      @relation(fields: [nodeId], references: [id])
+
+  @@map("flow_execution_steps")
+}

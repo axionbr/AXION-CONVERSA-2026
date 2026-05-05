@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx prisma *)",
+      "Bash(Get-ChildItem *)",
+      "Bash(npx tsc *)",
+      "Bash(npx --prefix \"C:/Users/mario/OneDrive/Área de Trabalho/AXION-CONVERSA-2026/apps/web\" tsc --noEmit --project \"C:/Users/mario/OneDrive/Área de Trabalho/AXION-CONVERSA-2026/apps/web/tsconfig.json\")",
+      "Bash(npx --prefix \"C:/Users/mario/OneDrive/Área de Trabalho/AXION-CONVERSA-2026/apps/web\" vite build --config \"C:/Users/mario/OneDrive/Área de Trabalho/AXION-CONVERSA-2026/apps/web/vite.config.ts\")",
+      "Bash(cmd *)",
+      "PowerShell(Set-Location *)"
+    ]
+  }
+}

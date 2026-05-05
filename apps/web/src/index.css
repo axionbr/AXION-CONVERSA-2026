@@ -1,0 +1,165 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Light Mode (default) ───────────────────────────────────────────────────
+   Paleta Tecle Motos: branco/cinza claro + preto/grafite + laranja destaque
+   ─────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --background:        0 0% 97%;      /* #F7F7F7 */
+    --foreground:        0 0% 9%;       /* #171717 */
+    --card:              0 0% 100%;     /* #FFFFFF */
+    --card-foreground:   0 0% 9%;
+    --popover:           0 0% 100%;
+    --popover-foreground:0 0% 9%;
+    --primary:           25 95% 53%;    /* #F97316 laranja Tecle Motos */
+    --primary-foreground:0 0% 100%;
+    --secondary:         0 0% 14%;      /* grafite escuro */
+    --secondary-foreground:0 0% 98%;
+    --muted:             0 0% 93%;      /* cinza claro */
+    --muted-foreground:  0 0% 42%;
+    --accent:            0 0% 92%;
+    --accent-foreground: 0 0% 9%;
+    --destructive:       0 84% 60%;
+    --destructive-foreground:0 0% 100%;
+    --border:            0 0% 88%;
+    --input:             0 0% 91%;
+    --ring:              25 95% 53%;
+    --radius:            0.625rem;
+    --sidebar-bg:        0 0% 100%;
+    --sidebar-border:    0 0% 86%;
+  }
+
+/* ─── Dark Mode ───────────────────────────────────────────────────────────────
+   Paleta Tecle Motos: preto/grafite profundo + branco + laranja destaque
+   ─────────────────────────────────────────────────────────────────────────── */
+  .dark {
+    --background:        0 0% 5%;       /* #0D0D0D quase preto */
+    --foreground:        0 0% 94%;      /* branco suave */
+    --card:              0 0% 8%;       /* #141414 grafite */
+    --card-foreground:   0 0% 94%;
+    --popover:           0 0% 7%;
+    --popover-foreground:0 0% 94%;
+    --primary:           25 95% 53%;    /* #F97316 laranja – igual nos dois modos */
+    --primary-foreground:0 0% 100%;
+    --secondary:         0 0% 18%;      /* grafite médio */
+    --secondary-foreground:0 0% 94%;
+    --muted:             0 0% 12%;      /* grafite escuro */
+    --muted-foreground:  0 0% 52%;
+    --accent:            0 0% 13%;
+    --accent-foreground: 0 0% 94%;
+    --destructive:       0 72% 51%;
+    --destructive-foreground:0 0% 100%;
+    --border:            0 0% 14%;
+    --input:             0 0% 13%;
+    --ring:              25 95% 53%;
+    --sidebar-bg:        0 0% 6%;       /* #0F0F0F – sidebar levemente mais escura */
+    --sidebar-border:    0 0% 12%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+}
+
+/* ─── Brand utilities ────────────────────────────────────────────────────────
+   Classes reutilizáveis com identidade Tecle Motos
+   ─────────────────────────────────────────────────────────────────────────── */
+@layer utilities {
+  /* Fundo glass */
+  .glass {
+    background: rgba(0, 0, 0, 0.03);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 0, 0, 0.07);
+  }
+  .glass-hover:hover { background: rgba(0, 0, 0, 0.05); }
+
+  /* Gradientes de marca */
+  .gradient-orange {
+    background: linear-gradient(135deg, #F97316, #FB923C);
+  }
+  .gradient-dark {
+    background: linear-gradient(135deg, #1C1C1C, #2D2D2D);
+  }
+
+  /* Glows de marca */
+  .glow-orange {
+    box-shadow: 0 0 24px rgba(249, 115, 22, 0.35);
+  }
+  .glow-orange-sm {
+    box-shadow: 0 0 12px rgba(249, 115, 22, 0.25);
+  }
+
+  /* Texto laranja gradiente */
+  .text-gradient {
+    background: linear-gradient(135deg, #F97316, #FB923C);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Sidebar usa variável dedicada */
+  .sidebar-bg {
+    background-color: hsl(var(--sidebar-bg));
+    border-color: hsl(var(--sidebar-border));
+  }
+}
+
+/* ─── Dark mode overrides (fora do @layer para especificidade) ───────────────*/
+.dark .glass {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+.dark .glass-hover:hover { background: rgba(255, 255, 255, 0.07); }
+
+/* ─── React Flow ─────────────────────────────────────────────────────────────*/
+.react-flow__background        { background-color: hsl(var(--background)); }
+.react-flow__edge-path         { stroke: #F97316 !important; }
+.react-flow__controls          { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); }
+.react-flow__controls-button   {
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+.react-flow__minimap           { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); }
+
+/* Handles */
+.react-flow__handle {
+  width: 14px !important;
+  height: 14px !important;
+  border-radius: 50% !important;
+  border: 2px solid hsl(var(--card)) !important;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.react-flow__handle:hover {
+  transform: scale(1.3);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.35);
+}
+.react-flow__handle-connecting {
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.5) !important;
+}
+
+/* Connection line */
+.react-flow__connection-path   { stroke: #F97316 !important; stroke-width: 2 !important; }
+
+/* Selected edge */
+.react-flow__edge.selected .react-flow__edge-path { stroke: #FB923C !important; }
+
+/* ─── PWA install banner ─────────────────────────────────────────────────────*/
+.pwa-banner {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  width: calc(100% - 2rem);
+  max-width: 420px;
+}

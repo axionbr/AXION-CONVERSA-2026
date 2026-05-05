@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\prisma\")",
+      "Bash(mkdir -p \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\routes\")",
+      "Bash(mkdir -p \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\services\")",
+      "Bash(mkdir -p \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\middleware\")",
+      "Bash(mkdir -p \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\socket\")",
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(npx tsx *)"
+    ]
+  }
+}

@@ -1,0 +1,105 @@
+BRIEFING OFICIAL — CRM / BOTCONVERSA 2026 — TECLE MOTOS
+======================================================================
+
+Referências visuais: use as logos anexadas ao documento DOCX correspondente.
+
+Atue como principal software architect e lead engineer para criar o CRM conversacional da Tecle Motos.
+
+Use os agentes e/ou time que existir na pasta "ProjetoAutomacaoTM". Escolha automaticamente os agentes/membros mais adequados para este projeto de CRM e orquestre o trabalho entre eles.
+
+Objetivo:
+Criar uma plataforma própria estilo BotConversa 2026, porém mais profissional e alinhada à Tecle Motos.
+
+Stack base:
+- Monorepo
+- apps/api: Node.js + Express ou NestJS (escolha a melhor opção e justifique brevemente)
+- apps/web: React + Vite + Tailwind + shadcn/ui + Framer Motion
+- Prisma
+- Banco SQL
+- Socket.IO
+- Integração com Z-API
+- IA com OpenAI e Anthropic Claude
+- Estrutura preparada para deploy em VPS
+- Base preparada para experiência mobile/PWA
+
+Diretrizes visuais:
+- Interface formal, empresarial e premium
+- Usar como referência as logos anexadas
+- Cores da marca: preto, grafite, branco e laranja
+- Usar laranja com cuidado, como cor de destaque, evitando excesso
+- Alta legibilidade e aparência SaaS profissional
+- Implementar modo Dark e modo Light em toda a plataforma
+
+Módulos obrigatórios:
+1. Dashboard principal
+2. Inbox de conversas
+3. CRM Kanban
+4. Leads / Contatos
+5. Flow Builder
+6. Tags e Campos personalizados
+7. Integrações
+8. Configuração IA
+9. Configuração Z-API
+10. Usuários / Perfis / Lojas
+11. Relatórios e logs
+12. Base para app mobile
+
+Dashboard:
+- Mostrar conversas reais em tempo real
+- Visual inspirado no WhatsApp
+- Pode usar cards de conversa + balões/alertas animados
+- Filtros por loja, vendedor, status, temperatura e sem resposta
+- Indicadores de lead quente, urgência, IA ativa/pausada
+- Visual elegante e corporativo
+
+Flow Builder:
+- Editor visual drag-and-drop tipo n8n
+- Usuário deve poder arrastar nós da lateral para o canvas
+- Criar, editar, conectar, salvar e ativar fluxos
+- Nós básicos: START, END, MESSAGE, QUESTION, CONDITION, AI_RESPONSE, SET_TAG, SET_FIELD, ASSIGN_USER, PAUSE_AI, WEBHOOK, DELAY
+- O fluxo deve salvar no backend e executar de verdade
+- Criar teste manual/sandbox do fluxo sem usar WhatsApp real
+- Criar testes automáticos do backend para fluxos
+
+Execução de fluxos:
+- Persistir Flow, FlowNode, FlowEdge
+- Validar antes de ativar
+- Criar FlowExecutionService, FlowTriggerService, FlowNodeExecutor e FlowValidationService
+- Integrar com webhook da Z-API
+- Permitir disparo manual de fluxo dentro da conversa
+- Registrar FlowExecution e FlowExecutionStep
+- Mockar Z-API/OpenAI/Claude nos testes
+
+Atendimento e IA:
+- Modos: IA automática, IA assistida e humano
+- Pausar IA por conversa
+- Resumo automático da conversa
+- Classificação de intenção
+- Temperatura do lead: FRIO, MORNO, QUENTE, URGENTE
+- Lead score
+- Roteamento por loja/região/vendedor
+
+Modo mobile / app:
+- Estruturar o projeto para que, ao acessar o link, o usuário possa ter opção de abrir/instalar experiência mobile quando aplicável
+- Considerar PWA / instalação em Android e iPhone
+- Preparar posteriormente app mobile nativo ou híbrido, mas já deixar o sistema pensado para isso
+- Se possível, incluir banner/CTA de instalação do app ou “Adicionar à tela inicial”
+
+Entregas esperadas:
+1. Revisar a estrutura existente
+2. Escolher os agentes do ProjetoAutomacaoTM que julgar necessários
+3. Gerar plano de execução
+4. Ajustar visual para perfil corporativo
+5. Garantir Dark/Light mode
+6. Melhorar o Dashboard
+7. Garantir execução real dos fluxos
+8. Criar testes automáticos dos fluxos
+9. Preparar base para mobile/app
+10. Listar arquivos alterados, comandos para rodar e próximos passos
+
+Importante:
+- Priorize código funcional
+- Evite exagero visual
+- Mantenha coerência com a marca
+- Se alguma decisão técnica tiver mais de uma opção, escolha a melhor e siga em frente
+- No final, informe claramente o que foi implementado, o que falta e como testar

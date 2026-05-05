@@ -1,0 +1,24 @@
+{
+  "name": "Tecle Motos CRM 2026",
+  "short_name": "TM CRM",
+  "description": "Plataforma de atendimento WhatsApp com IA e CRM — Tecle Motos",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0D0D0D",
+  "theme_color": "#F97316",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo-tecle-motos.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo-tecle-motos.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
