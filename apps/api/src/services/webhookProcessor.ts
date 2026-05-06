@@ -190,7 +190,7 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       take: 20,
     });
 
-    const chatHistory = recentMessages.map(m => ({
+    const chatHistory = recentMessages.map((m) => ({
       role: (m.direction === 'INBOUND' ? 'user' : 'assistant') as 'user' | 'assistant',
       content: m.content,
     }));

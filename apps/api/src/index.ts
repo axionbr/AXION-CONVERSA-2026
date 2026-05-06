@@ -23,7 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(
   '/api',
-  rateLimit({ windowMs: 60_000, max: 300, standardHeaders: true, legacyHeaders: false }),
+  rateLimit({ windowMs: 60_000, max: 300, standardHeaders: true, legacyHeaders: false }) as unknown as express.RequestHandler,
   routes
 );
 

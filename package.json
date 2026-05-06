@@ -19,6 +19,7 @@
     "db:studio": "npm run db:studio --workspace=apps/api"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "concurrently": "^8.2.2"
   },
   "dependencies": {
