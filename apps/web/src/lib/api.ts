@@ -45,6 +45,9 @@ export const pauseAI = (id: string) => api.post(`/conversations/${id}/pause-ai`)
 export const resumeAI = (id: string) => api.post(`/conversations/${id}/resume-ai`).then(r => r.data);
 export const transferConversation = (id: string, userId: string) => api.post(`/conversations/${id}/transfer`, { userId }).then(r => r.data);
 export const updateConversationStatus = (id: string, status: string) => api.put(`/conversations/${id}/status`, { status }).then(r => r.data);
+export const closeConversation = (id: string) => api.post(`/conversations/${id}/close`).then(r => r.data);
+export const waitConversation = (id: string) => api.post(`/conversations/${id}/wait`).then(r => r.data);
+export const markConversationRead = (id: string) => api.post(`/conversations/${id}/read`).then(r => r.data);
 
 // Leads
 export const getLeads = (params?: any) => api.get('/leads', { params }).then(r => r.data);

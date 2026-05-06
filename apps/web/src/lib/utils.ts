@@ -33,11 +33,21 @@ export const temperatureIcon: Record<string, string> = {
 };
 
 export const statusColor: Record<string, string> = {
-  ABERTA: 'text-green-400 bg-green-400/10 border-green-400/30',
+  NOVO: 'text-green-400 bg-green-400/10 border-green-400/30',
   EM_ATENDIMENTO: 'text-blue-400 bg-blue-400/10 border-blue-400/30',
+  AGUARDANDO_CLIENTE: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
+  FECHADO: 'text-gray-500 bg-gray-500/10 border-gray-500/30',
+  // legado
+  ABERTA: 'text-green-400 bg-green-400/10 border-green-400/30',
   AGUARDANDO: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
-  RESOLVIDA: 'text-gray-400 bg-gray-400/10 border-gray-400/30',
-  FECHADA: 'text-gray-600 bg-gray-600/10 border-gray-600/30',
+  FECHADA: 'text-gray-500 bg-gray-500/10 border-gray-500/30',
+};
+
+export const statusLabel: Record<string, string> = {
+  NOVO: 'Novo',
+  EM_ATENDIMENTO: 'Em Atendimento',
+  AGUARDANDO_CLIENTE: 'Aguardando',
+  FECHADO: 'Fechado',
 };
 
 export const modeLabel: Record<string, string> = {
