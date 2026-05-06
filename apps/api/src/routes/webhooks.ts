@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { config } from '../config';
 import { processZapiWebhook } from '../services/webhookProcessor';
 
@@ -31,7 +31,7 @@ router.post('/zapi', handleWebhook);
 router.post('/zapi/received', handleWebhook);
 
 // Endpoint de teste sem autenticação de secret
-router.post('/zapi/test', (req, res) => {
+router.post('/zapi/test', (req: Request, res: Response) => {
   res.status(200).json({ received: true });
   setImmediate(async () => {
     try {

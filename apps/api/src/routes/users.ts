@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
@@ -14,7 +14,7 @@ function strip(user: any) {
 
 router.use(authenticate);
 
-router.get('/', async (req: AuthRequest, res, next) => {
+router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { storeId } = req.query;
     const where: any = {};
@@ -27,7 +27,7 @@ router.get('/', async (req: AuthRequest, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/', requireRole('ADMIN', 'DIRETOR', 'GERENTE'), async (req: AuthRequest, res, next) => {
+router.post('/', requireRole('ADMIN', 'DIRETOR', 'GERENTE'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { name, email, password, role, storeId } = req.body;
     const hash = await bcrypt.hash(password, 10);
@@ -36,7 +36,7 @@ router.post('/', requireRole('ADMIN', 'DIRETOR', 'GERENTE'), async (req: AuthReq
   } catch (err) { next(err); }
 });
 
-router.put('/:id', requireRole('ADMIN', 'DIRETOR', 'GERENTE'), async (req, res, next) => {
+router.put('/:id', requireRole('ADMIN', 'DIRETOR', 'GERENTE'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { password, ...data } = req.body;
     const updateData: any = { ...data };
@@ -46,7 +46,7 @@ router.put('/:id', requireRole('ADMIN', 'DIRETOR', 'GERENTE'), async (req, res, 
   } catch (err) { next(err); }
 });
 
-router.delete('/:id', requireRole('ADMIN', 'DIRETOR'), async (req, res, next) => {
+router.delete('/:id', requireRole('ADMIN', 'DIRETOR'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     await prisma.user.update({ where: { id: req.params.id }, data: { active: false } });
     res.json({ success: true });
