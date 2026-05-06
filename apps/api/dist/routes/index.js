@@ -1,0 +1,35 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const auth_1 = __importDefault(require("./auth"));
+const users_1 = __importDefault(require("./users"));
+const stores_1 = __importDefault(require("./stores"));
+const contacts_1 = __importDefault(require("./contacts"));
+const leads_1 = __importDefault(require("./leads"));
+const conversations_1 = __importDefault(require("./conversations"));
+const tags_1 = __importDefault(require("./tags"));
+const customFields_1 = __importDefault(require("./customFields"));
+const dashboard_1 = __importDefault(require("./dashboard"));
+const ai_1 = __importDefault(require("./ai"));
+const zapi_1 = __importDefault(require("./zapi"));
+const webhooks_1 = __importDefault(require("./webhooks"));
+const flows_1 = __importDefault(require("./flows"));
+const router = (0, express_1.Router)();
+router.use('/auth', auth_1.default);
+router.use('/users', users_1.default);
+router.use('/stores', stores_1.default);
+router.use('/contacts', contacts_1.default);
+router.use('/leads', leads_1.default);
+router.use('/conversations', conversations_1.default);
+router.use('/tags', tags_1.default);
+router.use('/custom-fields', customFields_1.default);
+router.use('/dashboard', dashboard_1.default);
+router.use('/ai', ai_1.default);
+router.use('/zapi', zapi_1.default);
+router.use('/webhooks', webhooks_1.default);
+router.use('/flows', flows_1.default);
+exports.default = router;
+//# sourceMappingURL=index.js.map
