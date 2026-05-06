@@ -8,7 +8,9 @@
       "Bash(mkdir -p \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\socket\")",
       "Bash(npm install *)",
       "Bash(npx prisma *)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\" -Recurse -File)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

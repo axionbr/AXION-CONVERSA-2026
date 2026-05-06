@@ -64,11 +64,11 @@ export default function Login() {
       >
         <div className="rounded-2xl border border-border p-8 shadow-2xl bg-card">
 
-          {/* ── Logo Tecle Motos ─────────────────────────────────────────── */}
+          {/* ── Logo Axion Conversa ──────────────────────────────────────── */}
           <div className="flex flex-col items-center mb-8 select-none">
             <img
               src={logoSrc}
-              alt="Tecle Motos"
+              alt="Axion Conversa"
               draggable={false}
               style={{
                 height: '96px',        /* login: 80–110 px */

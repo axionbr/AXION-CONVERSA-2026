@@ -1,7 +1,7 @@
 {
-  "name": "Tecle Motos CRM 2026",
-  "short_name": "TM CRM",
-  "description": "Plataforma de atendimento WhatsApp com IA e CRM — Tecle Motos",
+  "name": "Axion Conversa",
+  "short_name": "Axion",
+  "description": "Plataforma de atendimento WhatsApp com IA e CRM — Axion Conversa",
   "start_url": "/dashboard",
   "display": "standalone",
   "background_color": "#0D0D0D",
@@ -9,13 +9,13 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/logo-tecle-motos.png",
+      "src": "/brand/logo-1-letras-brancas.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/logo-tecle-motos.png",
+      "src": "/brand/logo-1-letras-brancas.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

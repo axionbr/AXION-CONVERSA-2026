@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /* ─── Light Mode (default) ───────────────────────────────────────────────────
-   Paleta Tecle Motos: branco/cinza claro + preto/grafite + laranja destaque
+   Paleta Axion Conversa: branco/cinza claro + preto/grafite + laranja destaque
    ─────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
@@ -13,7 +13,7 @@
     --card-foreground:   0 0% 9%;
     --popover:           0 0% 100%;
     --popover-foreground:0 0% 9%;
-    --primary:           25 95% 53%;    /* #F97316 laranja Tecle Motos */
+    --primary:           25 95% 53%;    /* #F97316 laranja Axion Conversa */
     --primary-foreground:0 0% 100%;
     --secondary:         0 0% 14%;      /* grafite escuro */
     --secondary-foreground:0 0% 98%;
@@ -32,7 +32,7 @@
   }
 
 /* ─── Dark Mode ───────────────────────────────────────────────────────────────
-   Paleta Tecle Motos: preto/grafite profundo + branco + laranja destaque
+   Paleta Axion Conversa: preto/grafite profundo + branco + laranja destaque
    ─────────────────────────────────────────────────────────────────────────── */
   .dark {
     --background:        0 0% 5%;       /* #0D0D0D quase preto */
@@ -71,7 +71,7 @@
 }
 
 /* ─── Brand utilities ────────────────────────────────────────────────────────
-   Classes reutilizáveis com identidade Tecle Motos
+   Classes reutilizáveis com identidade Axion Conversa
    ─────────────────────────────────────────────────────────────────────────── */
 @layer utilities {
   /* Fundo glass */

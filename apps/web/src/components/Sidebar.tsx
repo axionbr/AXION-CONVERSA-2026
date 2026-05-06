@@ -45,12 +45,12 @@ export default function Sidebar() {
   return (
     <aside className="w-16 lg:w-60 flex flex-col shrink-0 border-r border-border bg-card">
 
-      {/* ── Logo Tecle Motos ──────────────────────────────────────────────── */}
+      {/* ── Logo Axion Conversa ───────────────────────────────────────────── */}
       {/* h-14 = 56px de altura da header → logo com 44px deixa 6px de padding */}
       <div className="h-14 flex items-center justify-center px-2 border-b border-border shrink-0">
         <img
           src={logoSrc}
-          alt="Tecle Motos"
+          alt="Axion Conversa"
           draggable={false}
           style={{
             height: '44px',          /* sidebar: 42–56 px */
