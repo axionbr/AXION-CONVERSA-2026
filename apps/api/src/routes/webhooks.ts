@@ -5,9 +5,19 @@ import { processZapiWebhook } from '../services/webhookProcessor';
 const router = Router();
 
 function validateSecret(req: any): boolean {
-  if (!config.webhookSecret) return true;
-  const secret = req.headers['x-webhook-secret'] || req.headers['x-hub-signature'];
-  return secret === config.webhookSecret;
+  const { webhookSecret, nodeEnv } = config;
+
+  // Sem secret configurado: libera em dev, bloqueia em produção
+  if (!webhookSecret) return nodeEnv !== 'production';
+
+  // Aceita o segredo em qualquer uma das quatro formas suportadas pela Z-API
+  const candidate =
+    (req.headers['x-webhook-secret'] as string) ||
+    (req.headers['x-zapi-secret'] as string) ||
+    (req.query?.secret as string) ||
+    (req.body?.secret as string);
+
+  return candidate === webhookSecret;
 }
 
 function handleWebhook(req: any, res: any) {

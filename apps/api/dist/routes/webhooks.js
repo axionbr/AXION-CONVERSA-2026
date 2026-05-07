@@ -5,10 +5,16 @@ const config_1 = require("../config");
 const webhookProcessor_1 = require("../services/webhookProcessor");
 const router = (0, express_1.Router)();
 function validateSecret(req) {
-    if (!config_1.config.webhookSecret)
-        return true;
-    const secret = req.headers['x-webhook-secret'] || req.headers['x-hub-signature'];
-    return secret === config_1.config.webhookSecret;
+    const { webhookSecret, nodeEnv } = config_1.config;
+    // Sem secret configurado: libera em dev, bloqueia em produção
+    if (!webhookSecret)
+        return nodeEnv !== 'production';
+    // Aceita o segredo em qualquer uma das quatro formas suportadas pela Z-API
+    const candidate = req.headers['x-webhook-secret'] ||
+        req.headers['x-zapi-secret'] ||
+        req.query?.secret ||
+        req.body?.secret;
+    return candidate === webhookSecret;
 }
 function handleWebhook(req, res) {
     if (!validateSecret(req)) {
