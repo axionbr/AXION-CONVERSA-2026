@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Send, Bot, Pause, UserCheck, MessageSquare,
-  Clock, X, ChevronDown,
+  Clock, X,
 } from 'lucide-react';
 import {
   getConversations, getConversationMessages, sendMessage,
@@ -14,40 +14,50 @@ import { getSocket, joinConversation, leaveConversation } from '../lib/socket';
 import { cn, timeAgo, temperatureColor, modeLabel, statusColor, statusLabel } from '../lib/utils';
 
 const STATUS_TABS = [
-  { value: '', label: 'Todos' },
-  { value: 'NOVO', label: 'Novos' },
-  { value: 'EM_ATENDIMENTO', label: 'Em Atendimento' },
+  { value: '',                  label: 'Todos' },
+  { value: 'NOVO',              label: 'Novos' },
+  { value: 'EM_ATENDIMENTO',    label: 'Em Atendimento' },
   { value: 'AGUARDANDO_CLIENTE', label: 'Aguardando' },
-  { value: 'FECHADO', label: 'Fechados' },
+  { value: 'FECHADO',           label: 'Fechados' },
 ];
+
+// Resolve o senderType efectivo — mensagens antigas (sem campo) usam direction como fallback
+function resolveSenderType(msg: any): 'CLIENT' | 'AGENT' | 'AI' | 'FLOW' {
+  if (msg.senderType && msg.senderType !== 'CLIENT') return msg.senderType;
+  if (msg.direction === 'INBOUND') return 'CLIENT';
+  // OUTBOUND sem senderType = mensagem antiga → trata como AGENT
+  if (!msg.senderType || msg.senderType === 'CLIENT') {
+    return msg.direction === 'OUTBOUND' ? 'AGENT' : 'CLIENT';
+  }
+  return msg.senderType;
+}
 
 export default function Inbox() {
   const [statusFilter, setStatusFilter] = useState('');
-  const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState<string>('');
-  const [msgInput, setMsgInput] = useState('');
+  const [search, setSearch]             = useState('');
+  const [selectedId, setSelectedId]     = useState<string>('');
+  const [msgInput, setMsgInput]         = useState('');
   const [localMessages, setLocalMessages] = useState<any[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const qc = useQueryClient();
+  const qc        = useQueryClient();
 
   const { data } = useQuery({
     queryKey: ['conversations-inbox', statusFilter, search],
-    queryFn: () => getConversations({ status: statusFilter || undefined, search: search || undefined, limit: 60 }),
+    queryFn:  () => getConversations({ status: statusFilter || undefined, search: search || undefined, limit: 60 }),
     refetchInterval: 15_000,
   });
   const conversations = data?.conversations || [];
-  const selected = conversations.find((c: any) => c.id === selectedId);
+  const selected      = conversations.find((c: any) => c.id === selectedId);
 
   const { data: messages = [] } = useQuery({
     queryKey: ['messages', selectedId],
-    queryFn: () => getConversationMessages(selectedId),
-    enabled: !!selectedId,
+    queryFn:  () => getConversationMessages(selectedId),
+    enabled:  !!selectedId,
   });
 
   useEffect(() => { setLocalMessages(messages); }, [messages]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [localMessages]);
 
-  // Abrir conversa: marcar como lido
   function openConversation(id: string) {
     setSelectedId(id);
     markConversationRead(id).catch(() => {});
@@ -62,7 +72,7 @@ export default function Inbox() {
     });
   }
 
-  // Socket: mensagens em tempo real
+  // Socket.IO — mensagens em tempo real
   useEffect(() => {
     const socket = getSocket();
     if (selectedId) {
@@ -93,31 +103,34 @@ export default function Inbox() {
 
   const sendMut = useMutation({
     mutationFn: (content: string) => sendMessage(selectedId, content),
-    onSuccess: (msg) => {
+    onSuccess:  (msg) => {
       setMsgInput('');
-      setLocalMessages(prev => [...prev, msg]);
+      setLocalMessages(prev => {
+        const exists = prev.some((m: any) => m.id === msg.id);
+        return exists ? prev : [...prev, msg];
+      });
     },
   });
 
   const assumeMut = useMutation({
     mutationFn: () => assumeConversation(selectedId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
   });
   const pauseMut = useMutation({
     mutationFn: () => pauseAI(selectedId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
   });
   const resumeMut = useMutation({
     mutationFn: () => resumeAI(selectedId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
   });
   const waitMut = useMutation({
     mutationFn: () => waitConversation(selectedId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['conversations-inbox'] }),
   });
   const closeMut = useMutation({
     mutationFn: () => closeConversation(selectedId),
-    onSuccess: () => {
+    onSuccess:  () => {
       qc.invalidateQueries({ queryKey: ['conversations-inbox'] });
       setSelectedId('');
     },
@@ -127,7 +140,8 @@ export default function Inbox() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Status tabs */}
+
+      {/* ── Status tabs ──────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 px-3 pt-2 pb-0 border-b border-border bg-card/20 shrink-0">
         {STATUS_TABS.map(tab => (
           <button
@@ -151,7 +165,8 @@ export default function Inbox() {
       </div>
 
       <div className="flex flex-1 min-h-0">
-        {/* Lista de conversas */}
+
+        {/* ── Lista de conversas ────────────────────────────────────────────── */}
         <div className="w-72 shrink-0 flex flex-col border-r border-border bg-card/30">
           <div className="p-3 border-b border-border">
             <div className="relative">
@@ -171,7 +186,10 @@ export default function Inbox() {
             ) : (
               conversations.map((conv: any) => {
                 const lastMsg = conv.messages?.[0];
-                const unread = conv.unreadCount || 0;
+                const unread  = conv.unreadCount || 0;
+                const lastDir = lastMsg?.direction === 'OUTBOUND';
+                const lastSender = lastMsg?.senderType === 'AI' ? 'IA' : lastDir ? '↩' : '';
+
                 return (
                   <button
                     key={conv.id}
@@ -204,8 +222,10 @@ export default function Inbox() {
                           </span>
                         </div>
 
+                        {/* Prévia da última mensagem com indicador de direção */}
                         <p className={cn('text-xs truncate mt-0.5', unread > 0 ? 'text-foreground' : 'text-muted-foreground')}>
-                          {lastMsg?.direction === 'OUTBOUND' ? '↩ ' : ''}{lastMsg?.content || '...'}
+                          {lastSender ? <span className="text-muted-foreground">{lastSender} </span> : null}
+                          {lastMsg?.content || '...'}
                         </p>
 
                         <div className="flex items-center gap-1 mt-1">
@@ -234,9 +254,10 @@ export default function Inbox() {
           </div>
         </div>
 
-        {/* Área de chat */}
+        {/* ── Área de chat ─────────────────────────────────────────────────── */}
         {selectedId && selected ? (
           <div className="flex-1 flex flex-col min-w-0">
+
             {/* Header do chat */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/50 shrink-0">
               <div className="flex items-center gap-3 min-w-0">
@@ -252,7 +273,9 @@ export default function Inbox() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{selected.contact?.phone}</span>
-                    {selected.assignedUser && <span>• {selected.assignedUser.name}</span>}
+                    {selected.assignedUser && (
+                      <span>• <span className="text-foreground/80">{selected.assignedUser.name}</span></span>
+                    )}
                     <span className="px-1 rounded bg-accent">
                       {modeLabel[selected.mode] || selected.mode}
                     </span>
@@ -321,39 +344,65 @@ export default function Inbox() {
               </div>
             </div>
 
-            {/* Mensagens */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {/* ── Mensagens ──────────────────────────────────────────────────── */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-1">
               <AnimatePresence initial={false}>
-                {localMessages.map((msg: any) => (
-                  <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className={cn('flex', msg.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start')}
-                  >
-                    <div
-                      className={cn(
-                        'max-w-[70%] px-4 py-2.5 rounded-2xl text-sm',
-                        msg.direction === 'OUTBOUND'
-                          ? 'bg-primary text-white rounded-br-sm'
-                          : 'bg-card text-foreground rounded-bl-sm border border-border',
-                        msg.fromFlow && 'ring-1 ring-blue-400/50'
-                      )}
+                {localMessages.map((msg: any) => {
+                  const senderType = resolveSenderType(msg);
+                  const isOutbound = msg.direction === 'OUTBOUND';
+
+                  // Label do remetente
+                  let senderLabel = '';
+                  if (isOutbound) {
+                    senderLabel =
+                      senderType === 'AI'   ? 'IA Auto' :
+                      senderType === 'FLOW' ? 'Fluxo'   :
+                      msg.senderUser?.name || selected.assignedUser?.name || 'Atendente';
+                  } else {
+                    senderLabel = selected.contact?.name || '';
+                  }
+
+                  // Cores da bolha por remetente
+                  const bubbleCls =
+                    !isOutbound
+                      ? 'bg-card text-foreground rounded-bl-sm border border-border'
+                      : senderType === 'AI'
+                      ? 'bg-blue-600/80 text-white rounded-br-sm'
+                      : senderType === 'FLOW'
+                      ? 'bg-purple-600/70 text-white rounded-br-sm'
+                      : 'bg-primary text-white rounded-br-sm';
+
+                  const timeCls = isOutbound ? 'text-white/60' : 'text-muted-foreground';
+
+                  return (
+                    <motion.div
+                      key={msg.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className={cn('flex flex-col gap-0.5', isOutbound ? 'items-end' : 'items-start')}
                     >
-                      <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-                      <p className={cn('text-[11px] mt-1', msg.direction === 'OUTBOUND' ? 'text-white/60' : 'text-muted-foreground')}>
-                        {timeAgo(msg.createdAt)}
-                        {msg.fromFlow && ' • Fluxo'}
-                      </p>
-                    </div>
-                  </motion.div>
-                ))}
+                      {/* Remetente */}
+                      <span className="text-[10px] text-muted-foreground px-1 flex items-center gap-1">
+                        {senderType === 'AI' && <Bot className="w-3 h-3 text-blue-400" />}
+                        {senderLabel}
+                      </span>
+
+                      <div className={cn('max-w-[70%] px-4 py-2.5 rounded-2xl text-sm', bubbleCls)}>
+                        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                        <p className={cn('text-[11px] mt-1', timeCls)}>
+                          {timeAgo(msg.createdAt)}
+                          {msg.fromFlow && ' • Fluxo'}
+                        </p>
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </AnimatePresence>
               <div ref={bottomRef} />
             </div>
 
-            {/* Input de mensagem */}
+            {/* ── Input de mensagem ──────────────────────────────────────────── */}
             <div className="p-4 border-t border-border bg-card/30 shrink-0">
               {selected.status === 'FECHADO' ? (
                 <p className="text-center text-sm text-muted-foreground py-1">

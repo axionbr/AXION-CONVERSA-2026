@@ -25,6 +25,7 @@ model User {
   automationLogs        AutomationLog[]
   createdFlows          Flow[]
   FlowExecution         FlowExecution[]
+  sentMessages          Message[]      @relation("MessagesSentByUser")
 
   @@map("users")
 }
@@ -131,9 +132,13 @@ model Message {
   fromFlow          Boolean  @default(false)
   flowNodeId        String?
   read              Boolean  @default(false)
+  // CLIENT | AGENT | AI | FLOW
+  senderType        String   @default("CLIENT")
+  senderUserId      String?
   createdAt         DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id])
+  senderUser   User?        @relation("MessagesSentByUser", fields: [senderUserId], references: [id])
 
   @@map("messages")
 }

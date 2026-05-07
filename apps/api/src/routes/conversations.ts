@@ -19,14 +19,18 @@ const convInclude = {
   messages: { orderBy: { createdAt: 'desc' as const }, take: 1 },
 };
 
-// Aplica filtro de loja/usuário conforme role
+// Inclui senderUser em qualquer consulta de mensagens
+const msgInclude = {
+  senderUser: { select: { id: true, name: true } },
+};
+
 function applyRoleFilter(where: any, user: any) {
   if (user.role === 'VENDEDOR' || user.role === 'ATENDENTE') {
     where.storeId = user.storeId;
   }
 }
 
-// GET /conversations — lista com filtros
+// GET /conversations
 router.get('/', async (req: AuthRequest, res, next) => {
   try {
     const { status, mode, storeId, assignedUserId, noReply, search, page = '1', limit = '20' } = req.query;
@@ -37,13 +41,11 @@ router.get('/', async (req: AuthRequest, res, next) => {
     if (storeId) where.storeId = storeId;
     if (assignedUserId) where.assignedUserId = assignedUserId;
 
-    // Filtro de sem resposta: conversas abertas sem resposta há >30 min
     if (noReply === 'true') {
       where.lastMessageAt = { lt: new Date(Date.now() - 30 * 60 * 1000) };
       where.status = { in: OPEN_STATUSES };
     }
 
-    // Busca por nome ou telefone do contato
     if (search && typeof search === 'string' && search.trim()) {
       where.contact = {
         OR: [
@@ -55,9 +57,9 @@ router.get('/', async (req: AuthRequest, res, next) => {
 
     applyRoleFilter(where, req.user!);
 
-    const pageNum = parseInt(page as string);
+    const pageNum  = parseInt(page as string);
     const limitNum = parseInt(limit as string);
-    const skip = (pageNum - 1) * limitNum;
+    const skip     = (pageNum - 1) * limitNum;
 
     const [conversations, total] = await Promise.all([
       prisma.conversation.findMany({
@@ -74,7 +76,7 @@ router.get('/', async (req: AuthRequest, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /conversations/live — conversas abertas em tempo real
+// GET /conversations/live
 router.get('/live', async (req: AuthRequest, res, next) => {
   try {
     const where: any = { status: { in: OPEN_STATUSES } };
@@ -95,25 +97,26 @@ router.get('/:id', async (req: AuthRequest, res, next) => {
   try {
     const conversation = await prisma.conversation.findUnique({
       where: { id: req.params.id },
-      include: { ...convInclude, messages: { orderBy: { createdAt: 'asc' } } },
+      include: { ...convInclude, messages: { orderBy: { createdAt: 'asc' }, include: msgInclude } },
     });
     if (!conversation) return res.status(404).json({ error: 'Conversa não encontrada' });
     res.json(conversation);
   } catch (err) { next(err); }
 });
 
-// GET /conversations/:id/messages
+// GET /conversations/:id/messages — histórico completo com remetente
 router.get('/:id/messages', async (req, res, next) => {
   try {
     const messages = await prisma.message.findMany({
-      where: { conversationId: req.params.id },
+      where:   { conversationId: req.params.id },
       orderBy: { createdAt: 'asc' },
+      include: msgInclude,
     });
     res.json(messages);
   } catch (err) { next(err); }
 });
 
-// POST /conversations/:id/send — vendedor envia mensagem pelo CRM
+// POST /conversations/:id/send — atendente envia mensagem pelo CRM
 router.post('/:id/send', async (req: AuthRequest, res, next) => {
   try {
     const { content } = req.body;
@@ -125,48 +128,60 @@ router.post('/:id/send', async (req: AuthRequest, res, next) => {
     });
     if (!conv) return res.status(404).json({ error: 'Conversa não encontrada' });
 
+    // Salva mensagem com senderType AGENT e FK para o usuário logado
     const msg = await prisma.message.create({
       data: {
         conversationId: req.params.id,
-        direction: 'OUTBOUND',
-        type: 'TEXT',
-        content: content.trim(),
+        direction:      'OUTBOUND',
+        type:           'TEXT',
+        content:        content.trim(),
+        senderType:     'AGENT',
+        senderUserId:   req.user!.id,
       },
+      include: msgInclude,
     });
 
     await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { lastMessageAt: new Date() },
+      data:  { lastMessageAt: new Date() },
     });
 
-    // Enviar via Z-API usando variáveis de ambiente (sem expor tokens)
-    await sendTextMessage(conv.contact.phone, content.trim(), conv.storeId).catch((e: any) =>
-      console.error('Z-API send error:', e.message)
-    );
+    console.log(`[AGENT] Mensagem salva | id: ${msg.id} | conversa: ${req.params.id} | atendente: ${req.user!.email}`);
+
+    // contact.phone está sem DDI no DB ("11999..."); Z-API precisa do DDI ("5511999...")
+    const zapiPhone = `55${conv.contact.phone}`;
+    try {
+      await sendTextMessage(zapiPhone, content.trim(), conv.storeId);
+      console.log(`[AGENT] Mensagem enviada via Z-API para ${zapiPhone}`);
+    } catch (e: any) {
+      console.error(`[AGENT] Falha ao enviar Z-API para ${zapiPhone}:`, e.message);
+    }
 
     emitNewMessage(req.params.id, {
-      id: msg.id,
+      id:             msg.id,
       conversationId: req.params.id,
-      direction: 'OUTBOUND',
-      type: 'TEXT',
-      content: msg.content,
-      createdAt: msg.createdAt.toISOString(),
+      direction:      'OUTBOUND',
+      type:           'TEXT',
+      content:        msg.content,
+      senderType:     'AGENT',
+      senderUser:     msg.senderUser,
+      createdAt:      msg.createdAt.toISOString(),
     });
 
     res.json(msg);
   } catch (err) { next(err); }
 });
 
-// POST /conversations/:id/assume — vendedor assume atendimento humano
+// POST /conversations/:id/assume
 router.post('/:id/assume', async (req: AuthRequest, res, next) => {
   try {
     const conv = await prisma.conversation.update({
       where: { id: req.params.id },
       data: {
         assignedUserId: req.user!.id,
-        mode: 'HUMANO',
-        aiEnabled: false,
-        status: 'EM_ATENDIMENTO',
+        mode:           'HUMANO',
+        aiEnabled:      false,
+        status:         'EM_ATENDIMENTO',
       },
     });
     emitConversationUpdate(req.params.id, { mode: 'HUMANO', assignedUserId: req.user!.id, status: 'EM_ATENDIMENTO' });
@@ -174,36 +189,36 @@ router.post('/:id/assume', async (req: AuthRequest, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /conversations/:id/wait — marcar como aguardando cliente
+// POST /conversations/:id/wait
 router.post('/:id/wait', async (req, res, next) => {
   try {
     const conv = await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { status: 'AGUARDANDO_CLIENTE' },
+      data:  { status: 'AGUARDANDO_CLIENTE' },
     });
     emitConversationUpdate(req.params.id, { status: 'AGUARDANDO_CLIENTE' });
     res.json(conv);
   } catch (err) { next(err); }
 });
 
-// POST /conversations/:id/close — fechar conversa
+// POST /conversations/:id/close
 router.post('/:id/close', async (req, res, next) => {
   try {
     const conv = await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { status: 'FECHADO', aiEnabled: false },
+      data:  { status: 'FECHADO', aiEnabled: false },
     });
     emitConversationUpdate(req.params.id, { status: 'FECHADO' });
     res.json(conv);
   } catch (err) { next(err); }
 });
 
-// POST /conversations/:id/read — zerar não-lidos ao abrir conversa
+// POST /conversations/:id/read
 router.post('/:id/read', async (req, res, next) => {
   try {
     await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { unreadCount: 0 },
+      data:  { unreadCount: 0 },
     });
     res.json({ ok: true });
   } catch (err) { next(err); }
@@ -214,7 +229,7 @@ router.post('/:id/pause-ai', async (req, res, next) => {
   try {
     const conv = await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { aiEnabled: false },
+      data:  { aiEnabled: false },
     });
     emitConversationUpdate(req.params.id, { aiEnabled: false });
     res.json(conv);
@@ -226,14 +241,14 @@ router.post('/:id/resume-ai', async (req, res, next) => {
   try {
     const conv = await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { aiEnabled: true, mode: 'IA_AUTOMATICA' },
+      data:  { aiEnabled: true, mode: 'IA_AUTOMATICA' },
     });
     emitConversationUpdate(req.params.id, { aiEnabled: true, mode: 'IA_AUTOMATICA' });
     res.json(conv);
   } catch (err) { next(err); }
 });
 
-// POST /conversations/:id/transfer — transferir para outro usuário
+// POST /conversations/:id/transfer
 router.post('/:id/transfer', async (req, res, next) => {
   try {
     const { userId } = req.body;
@@ -241,14 +256,14 @@ router.post('/:id/transfer', async (req, res, next) => {
 
     const conv = await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { assignedUserId: userId, mode: 'HUMANO', aiEnabled: false },
+      data:  { assignedUserId: userId, mode: 'HUMANO', aiEnabled: false },
     });
     emitConversationUpdate(req.params.id, { assignedUserId: userId, mode: 'HUMANO' });
     res.json(conv);
   } catch (err) { next(err); }
 });
 
-// PUT /conversations/:id/status — alterar status manualmente
+// PUT /conversations/:id/status
 router.put('/:id/status', async (req, res, next) => {
   try {
     const { status } = req.body;
