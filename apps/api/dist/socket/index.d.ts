@@ -4,4 +4,5 @@ export declare function getIO(): Server;
 export declare function emitNewMessage(conversationId: string, message: any): void;
 export declare function emitConversationUpdate(conversationId: string, data: any): void;
 export declare function emitNewConversation(data: any): void;
+export declare function emitToUser(userId: string, event: string, data: any): void;
 //# sourceMappingURL=index.d.ts.map

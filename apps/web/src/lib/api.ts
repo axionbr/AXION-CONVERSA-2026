@@ -104,3 +104,10 @@ export const getIntegrations = () => api.get('/settings/integrations').then(r =>
 export const getZapiConfigs = () => api.get('/zapi/config').then(r => r.data);
 export const saveZapiConfig = (data: any) => api.post('/zapi/config', data).then(r => r.data);
 export const getZapiStatus = (storeId?: string) => api.get('/zapi/status', { params: { storeId } }).then(r => r.data);
+
+// Handoff — transferência IA → vendedor
+export const getPendingHandoffs = () => api.get('/handoff/pending').then(r => r.data);
+export const acceptHandoff = (notificationId: string) =>
+  api.post(`/handoff/${notificationId}/accept`).then(r => r.data);
+export const initiateHandoffManual = (conversationId: string, summary?: string) =>
+  api.post(`/handoff/${conversationId}/initiate`, { summary }).then(r => r.data);

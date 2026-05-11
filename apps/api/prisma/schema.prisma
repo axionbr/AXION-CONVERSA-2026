@@ -16,6 +16,7 @@ model User {
   active    Boolean  @default(true)
   avatar    String?
   storeId   String?
+  region    String?  // Ex: "SP - São Paulo", "DDD 11", "Campinas" — para roteamento regional
   store     Store?   @relation(fields: [storeId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -26,6 +27,7 @@ model User {
   createdFlows          Flow[]
   FlowExecution         FlowExecution[]
   sentMessages          Message[]      @relation("MessagesSentByUser")
+  sellerNotifications   SellerNotification[]
 
   @@map("users")
 }
@@ -93,6 +95,7 @@ model Lead {
   conversations  Conversation[]
   automationLogs AutomationLog[]
   flowExecutions FlowExecution[]
+  sellerNotifications SellerNotification[]
 
   @@map("leads")
 }
@@ -118,6 +121,7 @@ model Conversation {
   messages      Message[]
   automationLogs AutomationLog[]
   flowExecutions FlowExecution[]
+  sellerNotifications SellerNotification[]
 
   @@map("conversations")
 }
@@ -246,6 +250,27 @@ model ZapiConfig {
   store Store? @relation(fields: [storeId], references: [id])
 
   @@map("zapi_configs")
+}
+
+// ─── Handoff / Notificações de vendedor ──────────────────────────────────────
+
+model SellerNotification {
+  id             String    @id @default(cuid())
+  conversationId String
+  leadId         String?
+  userId         String                          // vendedor notificado
+  status         String    @default("PENDING")   // PENDING | ACCEPTED | EXPIRED | DECLINED
+  region         String?                         // região extraída da conversa
+  summary        String?                         // resumo gerado pela IA
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime                        // quando a notificação expira
+  acceptedAt     DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  lead         Lead?        @relation(fields: [leadId], references: [id])
+
+  @@map("seller_notifications")
 }
 
 // ─── Flows ───────────────────────────────────────────────────────────────────

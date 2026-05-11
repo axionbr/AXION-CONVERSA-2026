@@ -51,7 +51,17 @@ export const statusLabel: Record<string, string> = {
 };
 
 export const modeLabel: Record<string, string> = {
-  IA_AUTOMATICA: 'IA Auto',
-  IA_ASSISTIDA: 'IA Assist.',
-  HUMANO: 'Humano',
+  IA_AUTOMATICA:   'IA Auto',
+  IA_ASSISTIDA:    'IA Assist.',
+  HUMANO:          'Humano',
+  AGUARDANDO_HUMANO: 'Aguard. Vendedor',
+  PAUSADO:         'Pausado',
+};
+
+export const modeColor: Record<string, string> = {
+  IA_AUTOMATICA:   'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  IA_ASSISTIDA:    'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+  HUMANO:          'bg-green-500/15 text-green-400 border-green-500/30',
+  AGUARDANDO_HUMANO: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+  PAUSADO:         'bg-gray-500/15 text-gray-400 border-gray-500/30',
 };

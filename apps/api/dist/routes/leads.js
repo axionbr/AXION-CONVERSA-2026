@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const auth_1 = require("../middleware/auth");
+const flowEngine_1 = require("../services/flowEngine");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
 router.use(auth_1.authenticate);
@@ -38,6 +39,23 @@ router.get('/', async (req, res, next) => {
                     store: { select: { id: true, name: true } },
                     assignedUser: { select: { id: true, name: true } },
                     tags: { include: { tag: true } },
+                    // Última mensagem para o card Kanban
+                    conversations: {
+                        orderBy: { createdAt: 'desc' },
+                        take: 1,
+                        include: {
+                            messages: {
+                                orderBy: { createdAt: 'desc' },
+                                take: 1,
+                            },
+                        },
+                    },
+                    // Última análise IA para próxima ação no card Kanban
+                    automationLogs: {
+                        where: { type: 'AI_ANALYSIS' },
+                        orderBy: { createdAt: 'desc' },
+                        take: 1,
+                    },
                 },
             }),
             prisma.lead.count({ where }),
@@ -92,6 +110,28 @@ router.put('/:id', async (req, res, next) => {
                 tags: { include: { tag: true } },
             },
         });
+        // Log KANBAN_STAGE_CHANGED quando o estágio muda
+        if (req.body.kanbanStage) {
+            prisma.automationLog.create({
+                data: {
+                    type: 'KANBAN_STAGE_CHANGED',
+                    description: `Lead "${lead.name}" movido para ${req.body.kanbanStage}`,
+                    data: JSON.stringify({ stage: req.body.kanbanStage, leadId: lead.id }),
+                    leadId: lead.id,
+                },
+            }).catch((e) => console.error('[KANBAN] Log error:', e.message));
+            // Aciona fluxos com trigger KANBAN_STAGE_CHANGED se houver conversa vinculada
+            prisma.conversation.findFirst({
+                where: { leadId: lead.id },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true },
+            }).then(conv => {
+                if (conv) {
+                    (0, flowEngine_1.triggerFlowsByEvent)('KANBAN_STAGE_CHANGED', req.body.kanbanStage, conv.id, lead.id)
+                        .catch((e) => console.error('[FLOW] KANBAN_STAGE_CHANGED:', e.message));
+                }
+            }).catch(() => { });
+        }
         res.json(lead);
     }
     catch (err) {

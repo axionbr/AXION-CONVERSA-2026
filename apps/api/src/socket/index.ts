@@ -13,8 +13,9 @@ export function initSocket(server: any) {
   });
 
   io.on('connection', (socket) => {
-    console.log(`Socket connected: ${socket.id}`);
+    console.log(`[SOCKET] conectado: ${socket.id}`);
 
+    // Room da conversa específica
     socket.on('join:conversation', (conversationId: string) => {
       socket.join(`conv:${conversationId}`);
     });
@@ -23,12 +24,20 @@ export function initSocket(server: any) {
       socket.leave(`conv:${conversationId}`);
     });
 
+    // Room global do dashboard
     socket.on('join:dashboard', () => {
       socket.join('dashboard');
     });
 
+    // Room pessoal do usuário — notificações de handoff para vendedor específico
+    socket.on('join:user', (userId: string) => {
+      if (userId && typeof userId === 'string') {
+        socket.join(`user:${userId}`);
+      }
+    });
+
     socket.on('disconnect', () => {
-      console.log(`Socket disconnected: ${socket.id}`);
+      console.log(`[SOCKET] desconectado: ${socket.id}`);
     });
   });
 
@@ -39,6 +48,8 @@ export function getIO(): Server {
   if (!io) throw new Error('Socket.IO not initialized');
   return io;
 }
+
+// ─── Emissores ────────────────────────────────────────────────────────────────
 
 export function emitNewMessage(conversationId: string, message: any) {
   getIO().to(`conv:${conversationId}`).emit('message:new', { conversationId, message });
@@ -53,4 +64,9 @@ export function emitConversationUpdate(conversationId: string, data: any) {
 
 export function emitNewConversation(data: any) {
   getIO().to('dashboard').emit('conversation:new', data);
+}
+
+// Emite evento para um usuário específico (sala user:<userId>)
+export function emitToUser(userId: string, event: string, data: any) {
+  getIO().to(`user:${userId}`).emit(event, data);
 }

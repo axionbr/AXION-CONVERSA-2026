@@ -6,6 +6,9 @@ const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
 router.use(auth_1.authenticate);
+// Status reais usados no banco
+const OPEN_STATUSES = ['NOVO', 'EM_ATENDIMENTO', 'AGUARDANDO_CLIENTE'];
+const KANBAN_ORDER = ['NOVO_LEAD', 'QUALIFICADO', 'EM_NEGOCIACAO', 'AGUARDANDO_PAGAMENTO', 'VENDA_FECHADA', 'PERDIDO', 'POS_VENDA'];
 router.get('/metrics', async (req, res, next) => {
     try {
         const where = {};
@@ -16,9 +19,12 @@ router.get('/metrics', async (req, res, next) => {
         today.setHours(0, 0, 0, 0);
         const [totalConversations, activeConversations, awaitingHuman, resolvedToday, newLeadsToday, hotLeads, aiHandled,] = await Promise.all([
             prisma.conversation.count({ where }),
-            prisma.conversation.count({ where: { ...where, status: { in: ['ABERTA', 'EM_ATENDIMENTO'] } } }),
-            prisma.conversation.count({ where: { ...where, status: 'AGUARDANDO', mode: 'HUMANO' } }),
-            prisma.conversation.count({ where: { ...where, status: 'RESOLVIDA', updatedAt: { gte: today } } }),
+            // NOVO + EM_ATENDIMENTO = conversas abertas
+            prisma.conversation.count({ where: { ...where, status: { in: ['NOVO', 'EM_ATENDIMENTO'] } } }),
+            // AGUARDANDO_CLIENTE em modo humano = aguardando atendente
+            prisma.conversation.count({ where: { ...where, status: 'AGUARDANDO_CLIENTE', mode: 'HUMANO' } }),
+            // FECHADO hoje = resolvidas hoje
+            prisma.conversation.count({ where: { ...where, status: 'FECHADO', updatedAt: { gte: today } } }),
             prisma.lead.count({ where: { ...where, createdAt: { gte: today } } }),
             prisma.lead.count({ where: { ...where, temperature: { in: ['QUENTE', 'URGENTE'] } } }),
             prisma.conversation.count({ where: { ...where, mode: 'IA_AUTOMATICA', aiEnabled: true } }),
@@ -30,7 +36,6 @@ router.get('/metrics', async (req, res, next) => {
             resolvedToday,
             newLeadsToday,
             hotLeads,
-            avgResponseTime: 4.2,
             aiHandled,
         });
     }
@@ -40,7 +45,8 @@ router.get('/metrics', async (req, res, next) => {
 });
 router.get('/live-conversations', async (req, res, next) => {
     try {
-        const where = { status: { in: ['ABERTA', 'EM_ATENDIMENTO', 'AGUARDANDO'] } };
+        // Usa status reais do banco
+        const where = { status: { in: OPEN_STATUSES } };
         if (req.user.role === 'VENDEDOR' || req.user.role === 'ATENDENTE') {
             where.storeId = req.user.storeId;
         }
@@ -106,10 +112,18 @@ router.get('/charts', async (req, res, next) => {
                 select: { createdAt: true },
             }),
             prisma.conversation.findMany({ where, select: { status: true } }),
-            prisma.lead.findMany({ where: leadWhere, select: { temperature: true } }),
+            // Inclui temperatura, kanbanStage e responsável para derivar 4 gráficos em 1 query
+            prisma.lead.findMany({
+                where: leadWhere,
+                select: {
+                    temperature: true,
+                    kanbanStage: true,
+                    assignedUser: { select: { name: true } },
+                },
+            }),
             prisma.message.findMany({ where: messageWhere, select: { direction: true } }),
         ]);
-        // Buckets: horas (today) ou dias (7d/30d)
+        // ── Conversas por período ──────────────────────────────────────────────────
         const buckets = {};
         if (isHourly) {
             for (let h = 0; h <= now.getHours(); h++) {
@@ -134,7 +148,7 @@ router.get('/charts', async (req, res, next) => {
             });
         }
         const conversationsByDay = Object.entries(buckets).map(([date, count]) => ({ date, count }));
-        // Distribuição de status
+        // ── Status das conversas ───────────────────────────────────────────────────
         const statusMap = {};
         allConversations.forEach(c => {
             statusMap[c.status] = (statusMap[c.status] || 0) + 1;
@@ -142,13 +156,13 @@ router.get('/charts', async (req, res, next) => {
         const statusDistribution = Object.entries(statusMap)
             .map(([status, count]) => ({ status, count }))
             .sort((a, b) => b.count - a.count);
-        // Temperatura dos leads
+        // ── Temperatura dos leads ──────────────────────────────────────────────────
         const tempOrder = ['FRIO', 'MORNO', 'QUENTE', 'URGENTE'];
         const tempMap = { FRIO: 0, MORNO: 0, QUENTE: 0, URGENTE: 0 };
         allLeads.forEach(l => { if (l.temperature in tempMap)
             tempMap[l.temperature]++; });
         const leadTemperature = tempOrder.map(t => ({ temperature: t, count: tempMap[t] }));
-        // Mensagens inbound vs outbound
+        // ── Mensagens recebidas × enviadas ─────────────────────────────────────────
         let inbound = 0, outbound = 0;
         messagesInPeriod.forEach(m => {
             if (m.direction === 'INBOUND')
@@ -156,11 +170,34 @@ router.get('/charts', async (req, res, next) => {
             else
                 outbound++;
         });
+        // ── Leads por responsável ──────────────────────────────────────────────────
+        const userMap = {};
+        allLeads.forEach(l => {
+            const name = l.assignedUser?.name ?? 'Sem responsável';
+            userMap[name] = (userMap[name] || 0) + 1;
+        });
+        const leadsByUser = Object.entries(userMap)
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10);
+        // ── Funil Kanban ───────────────────────────────────────────────────────────
+        const kanbanMap = {};
+        KANBAN_ORDER.forEach(k => { kanbanMap[k] = 0; });
+        allLeads.forEach(l => {
+            const stage = l.kanbanStage || 'NOVO_LEAD';
+            if (stage in kanbanMap)
+                kanbanMap[stage]++;
+            else
+                kanbanMap['NOVO_LEAD']++;
+        });
+        const kanbanStages = KANBAN_ORDER.map(k => ({ stage: k, count: kanbanMap[k] }));
         res.json({
             conversationsByDay,
             statusDistribution,
             leadTemperature,
             messagesByDirection: { inbound, outbound },
+            leadsByUser,
+            kanbanStages,
         });
     }
     catch (err) {

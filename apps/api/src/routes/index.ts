@@ -13,6 +13,7 @@ import zapiRoutes from './zapi';
 import webhookRoutes from './webhooks';
 import flowRoutes from './flows';
 import settingsRoutes from './settings';
+import handoffRoutes from './handoff';
 
 const router = Router();
 
@@ -30,5 +31,6 @@ router.use('/zapi', zapiRoutes);
 router.use('/webhooks', webhookRoutes);
 router.use('/flows', flowRoutes);
 router.use('/settings', settingsRoutes);
+router.use('/handoff', handoffRoutes);
 
 export default router;

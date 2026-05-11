@@ -16,4 +16,5 @@ export declare const config: {
     };
     webhookSecret: string;
 };
+export declare function validateProductionConfig(): void;
 //# sourceMappingURL=config.d.ts.map

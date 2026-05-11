@@ -5,6 +5,7 @@ exports.getIO = getIO;
 exports.emitNewMessage = emitNewMessage;
 exports.emitConversationUpdate = emitConversationUpdate;
 exports.emitNewConversation = emitNewConversation;
+exports.emitToUser = emitToUser;
 const socket_io_1 = require("socket.io");
 const config_1 = require("../config");
 let io;
@@ -17,18 +18,26 @@ function initSocket(server) {
         },
     });
     io.on('connection', (socket) => {
-        console.log(`Socket connected: ${socket.id}`);
+        console.log(`[SOCKET] conectado: ${socket.id}`);
+        // Room da conversa específica
         socket.on('join:conversation', (conversationId) => {
             socket.join(`conv:${conversationId}`);
         });
         socket.on('leave:conversation', (conversationId) => {
             socket.leave(`conv:${conversationId}`);
         });
+        // Room global do dashboard
         socket.on('join:dashboard', () => {
             socket.join('dashboard');
         });
+        // Room pessoal do usuário — notificações de handoff para vendedor específico
+        socket.on('join:user', (userId) => {
+            if (userId && typeof userId === 'string') {
+                socket.join(`user:${userId}`);
+            }
+        });
         socket.on('disconnect', () => {
-            console.log(`Socket disconnected: ${socket.id}`);
+            console.log(`[SOCKET] desconectado: ${socket.id}`);
         });
     });
     return io;
@@ -38,6 +47,7 @@ function getIO() {
         throw new Error('Socket.IO not initialized');
     return io;
 }
+// ─── Emissores ────────────────────────────────────────────────────────────────
 function emitNewMessage(conversationId, message) {
     getIO().to(`conv:${conversationId}`).emit('message:new', { conversationId, message });
     getIO().to('dashboard').emit('message:new', { conversationId, message });
@@ -49,5 +59,9 @@ function emitConversationUpdate(conversationId, data) {
 }
 function emitNewConversation(data) {
     getIO().to('dashboard').emit('conversation:new', data);
+}
+// Emite evento para um usuário específico (sala user:<userId>)
+function emitToUser(userId, event, data) {
+    getIO().to(`user:${userId}`).emit(event, data);
 }
 //# sourceMappingURL=index.js.map
