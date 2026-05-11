@@ -32,30 +32,30 @@
   }
 
 /* ─── Dark Mode ───────────────────────────────────────────────────────────────
-   Paleta Axion Conversa: preto/grafite profundo + branco + laranja destaque
+   Paleta Axion Conversa: cinza escuro estilo ChatGPT + laranja destaque
    ─────────────────────────────────────────────────────────────────────────── */
   .dark {
-    --background:        0 0% 5%;       /* #0D0D0D quase preto */
-    --foreground:        0 0% 94%;      /* branco suave */
-    --card:              0 0% 8%;       /* #141414 grafite */
-    --card-foreground:   0 0% 94%;
-    --popover:           0 0% 7%;
-    --popover-foreground:0 0% 94%;
+    --background:        0 0% 13%;      /* #212121 cinza escuro principal */
+    --foreground:        0 0% 96%;      /* #f5f5f5 texto principal */
+    --card:              0 0% 16%;      /* #2a2a2a cards/painéis */
+    --card-foreground:   0 0% 96%;
+    --popover:           0 0% 15%;      /* #262626 popovers */
+    --popover-foreground:0 0% 96%;
     --primary:           25 95% 53%;    /* #F97316 laranja – igual nos dois modos */
     --primary-foreground:0 0% 100%;
-    --secondary:         0 0% 18%;      /* grafite médio */
-    --secondary-foreground:0 0% 94%;
-    --muted:             0 0% 12%;      /* grafite escuro */
-    --muted-foreground:  0 0% 52%;
-    --accent:            0 0% 13%;
-    --accent-foreground: 0 0% 94%;
+    --secondary:         0 0% 22%;      /* #383838 elementos secundários */
+    --secondary-foreground:0 0% 96%;
+    --muted:             0 0% 18%;      /* #2e2e2e áreas abafadas */
+    --muted-foreground:  0 0% 70%;      /* #b3b3b3 texto secundário */
+    --accent:            0 0% 18%;      /* #2f2f2f hover/accent */
+    --accent-foreground: 0 0% 96%;
     --destructive:       0 72% 51%;
     --destructive-foreground:0 0% 100%;
-    --border:            0 0% 14%;
-    --input:             0 0% 13%;
+    --border:            0 0% 20%;      /* #343434 bordas */
+    --input:             0 0% 17%;      /* #2b2b2b campos de input */
     --ring:              25 95% 53%;
-    --sidebar-bg:        0 0% 6%;       /* #0F0F0F – sidebar levemente mais escura */
-    --sidebar-border:    0 0% 12%;
+    --sidebar-bg:        0 0% 12%;      /* #1e1e1e sidebar levemente mais escura */
+    --sidebar-border:    0 0% 19%;      /* #313131 borda da sidebar */
   }
 }
 

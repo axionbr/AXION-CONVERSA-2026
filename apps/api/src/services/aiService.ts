@@ -92,6 +92,114 @@ export async function generateAiResponse(
   }
 }
 
+export interface ConversationAnalysis {
+  tipo: 'venda' | 'suporte' | 'orcamento' | 'reclamacao' | 'informacao' | 'outro';
+  temperatura: 'FRIO' | 'MORNO' | 'QUENTE' | 'URGENTE';
+  resumo: string;
+  proximaAcao: string;
+  respostaSugerida: string;
+}
+
+export async function analyzeConversation(
+  messages: Array<{ direction: string; content: string; senderType: string }>,
+  storeId?: string | null,
+): Promise<ConversationAnalysis> {
+  const historyText = messages
+    .map(m => {
+      const role = m.direction === 'INBOUND' ? '[CLIENTE]' :
+                   m.senderType === 'AI'     ? '[IA]'      : '[ATENDENTE]';
+      return `${role}: ${m.content}`;
+    })
+    .join('\n');
+
+  const analysisPrompt = `Analise esta conversa de WhatsApp e retorne um JSON com EXATAMENTE estas chaves:
+{
+  "tipo": "venda|suporte|orcamento|reclamacao|informacao|outro",
+  "temperatura": "FRIO|MORNO|QUENTE|URGENTE",
+  "resumo": "resumo em até 2 frases do que o cliente quer",
+  "proximaAcao": "acao especifica que o atendente deve fazer agora",
+  "respostaSugerida": "mensagem pronta para responder ao cliente em portugues do Brasil, cordial e direta"
+}
+
+RESPONDA APENAS COM O JSON. SEM MARKDOWN. SEM TEXTO ADICIONAL.
+
+Conversa:
+${historyText}`;
+
+  // Tentar Claude
+  if (config.anthropicApiKey) {
+    try {
+      let provider = 'anthropic';
+      let model = config.aiModel || 'claude-haiku-4-5-20251001';
+
+      if (storeId) {
+        const aiCfg = await prisma.aiConfig.findUnique({ where: { storeId } });
+        if (aiCfg) { provider = aiCfg.provider; model = aiCfg.model; }
+      }
+
+      if (provider === 'anthropic' || !config.openaiApiKey) {
+        if (!isClaudeModel(model)) model = 'claude-haiku-4-5-20251001';
+        const client = new Anthropic({ apiKey: config.anthropicApiKey });
+        const resp = await client.messages.create({
+          model,
+          max_tokens: 600,
+          messages: [{ role: 'user', content: analysisPrompt }],
+        });
+        const block = resp.content[0];
+        const raw = block.type === 'text' ? block.text.trim() : '';
+        const parsed = JSON.parse(raw) as ConversationAnalysis;
+        console.log('[IA] Analise Claude concluida');
+        return parsed;
+      }
+    } catch (e: any) {
+      console.warn('[IA] Claude falhou na analise, usando fallback:', e.message);
+    }
+  }
+
+  // Tentar OpenAI
+  if (config.openaiApiKey) {
+    try {
+      const client = new OpenAI({ apiKey: config.openaiApiKey });
+      const resp = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: analysisPrompt }],
+      });
+      const raw = (resp.choices[0]?.message?.content ?? '').trim();
+      const parsed = JSON.parse(raw) as ConversationAnalysis;
+      console.log('[IA] Analise OpenAI concluida');
+      return parsed;
+    } catch (e: any) {
+      console.warn('[IA] OpenAI falhou na analise, usando fallback:', e.message);
+    }
+  }
+
+  // Fallback por palavras-chave
+  const allText = messages.map(m => m.content).join(' ').toLowerCase();
+  const { temperature } = await classifyIntentAndTemperature(allText);
+  const lastClientMsg = [...messages].reverse().find(m => m.direction === 'INBOUND');
+
+  const tipoMap: Record<string, ConversationAnalysis['tipo']> = {
+    preco: 'orcamento', valor: 'orcamento', financiamento: 'orcamento',
+    comprar: 'venda', fechar: 'venda', pedido: 'venda',
+    problema: 'suporte', erro: 'suporte', reclamacao: 'reclamacao',
+  };
+  let tipo: ConversationAnalysis['tipo'] = 'informacao';
+  for (const [kw, t] of Object.entries(tipoMap)) {
+    if (allText.includes(kw)) { tipo = t; break; }
+  }
+
+  return {
+    tipo,
+    temperatura: temperature,
+    resumo: lastClientMsg ? `Cliente enviou: "${lastClientMsg.content.substring(0, 80)}"` : 'Sem mensagens do cliente',
+    proximaAcao: temperature === 'URGENTE' ? 'Atender imediatamente — lead urgente'
+               : temperature === 'QUENTE'  ? 'Entrar em contato rapidamente — interesse alto'
+               : 'Responder ao cliente e qualificar necessidade',
+    respostaSugerida: 'Ola! Obrigado por entrar em contato. Como posso te ajudar hoje?',
+  };
+}
+
 export async function classifyIntentAndTemperature(text: string): Promise<{
   intent:      string;
   temperature: 'FRIO' | 'MORNO' | 'QUENTE' | 'URGENTE';

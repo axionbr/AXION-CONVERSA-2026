@@ -12,6 +12,7 @@ import aiRoutes from './ai';
 import zapiRoutes from './zapi';
 import webhookRoutes from './webhooks';
 import flowRoutes from './flows';
+import settingsRoutes from './settings';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/ai', aiRoutes);
 router.use('/zapi', zapiRoutes);
 router.use('/webhooks', webhookRoutes);
 router.use('/flows', flowRoutes);
+router.use('/settings', settingsRoutes);
 
 export default router;

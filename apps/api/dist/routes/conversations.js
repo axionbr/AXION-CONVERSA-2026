@@ -4,6 +4,7 @@ const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const auth_1 = require("../middleware/auth");
 const zapiService_1 = require("../services/zapiService");
+const aiService_1 = require("../services/aiService");
 const socket_1 = require("../socket");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
@@ -14,7 +15,11 @@ const convInclude = {
     lead: { include: { tags: { include: { tag: true } } } },
     assignedUser: { select: { id: true, name: true } },
     store: { select: { id: true, name: true } },
-    messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+    messages: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        include: { senderUser: { select: { id: true, name: true } } },
+    },
 };
 // Inclui senderUser em qualquer consulta de mensagens
 const msgInclude = {
@@ -145,7 +150,7 @@ router.post('/:id/send', async (req, res, next) => {
             data: { lastMessageAt: new Date() },
         });
         console.log(`[AGENT] Mensagem salva | id: ${msg.id} | conversa: ${req.params.id} | atendente: ${req.user.email}`);
-        // contact.phone está sem DDI no DB ("11999..."); Z-API precisa do DDI ("5511999...")
+        // contact.phone esta sem DDI no DB ("11999..."); Z-API precisa do DDI ("5511999...")
         const zapiPhone = `55${conv.contact.phone}`;
         try {
             await (0, zapiService_1.sendTextMessage)(zapiPhone, content.trim(), conv.storeId);
@@ -154,7 +159,7 @@ router.post('/:id/send', async (req, res, next) => {
         catch (e) {
             console.error(`[AGENT] Falha ao enviar Z-API para ${zapiPhone}:`, e.message);
         }
-        (0, socket_1.emitNewMessage)(req.params.id, {
+        const msgPayload = {
             id: msg.id,
             conversationId: req.params.id,
             direction: 'OUTBOUND',
@@ -163,6 +168,10 @@ router.post('/:id/send', async (req, res, next) => {
             senderType: 'AGENT',
             senderUser: msg.senderUser,
             createdAt: msg.createdAt.toISOString(),
+        };
+        (0, socket_1.emitNewMessage)(req.params.id, msgPayload);
+        (0, socket_1.emitConversationUpdate)(req.params.id, {
+            lastMessageAt: msg.createdAt.toISOString(),
         });
         res.json(msg);
     }
@@ -270,6 +279,61 @@ router.post('/:id/transfer', async (req, res, next) => {
         });
         (0, socket_1.emitConversationUpdate)(req.params.id, { assignedUserId: userId, mode: 'HUMANO' });
         res.json(conv);
+    }
+    catch (err) {
+        next(err);
+    }
+});
+// GET /conversations/:id/analyze — busca analise mais recente salva
+router.get('/:id/analyze', async (req, res, next) => {
+    try {
+        const log = await prisma.automationLog.findFirst({
+            where: { conversationId: req.params.id, type: 'AI_ANALYSIS' },
+            orderBy: { createdAt: 'desc' },
+        });
+        if (!log || !log.data)
+            return res.json({ analysis: null });
+        try {
+            res.json({ analysis: JSON.parse(log.data) });
+        }
+        catch {
+            res.json({ analysis: null });
+        }
+    }
+    catch (err) {
+        next(err);
+    }
+});
+// POST /conversations/:id/analyze — solicita nova analise
+router.post('/:id/analyze', async (req, res, next) => {
+    try {
+        const conv = await prisma.conversation.findUnique({
+            where: { id: req.params.id },
+            include: {
+                messages: { orderBy: { createdAt: 'asc' }, take: 30 },
+            },
+        });
+        if (!conv)
+            return res.status(404).json({ error: 'Conversa nao encontrada' });
+        if (conv.messages.length === 0) {
+            return res.json({ analysis: null, message: 'Sem mensagens para analisar' });
+        }
+        console.log(`[IA] Analisando conversa ${conv.id} (${conv.messages.length} mensagens)`);
+        const analysis = await (0, aiService_1.analyzeConversation)(conv.messages.map(m => ({
+            direction: m.direction,
+            content: m.content,
+            senderType: m.senderType,
+        })), conv.storeId);
+        await prisma.automationLog.create({
+            data: {
+                type: 'AI_ANALYSIS',
+                description: `Analise IA da conversa`,
+                data: JSON.stringify(analysis),
+                conversationId: conv.id,
+            },
+        });
+        console.log(`[IA] Analise salva | conversa: ${conv.id} | tipo: ${analysis.tipo} | temp: ${analysis.temperatura}`);
+        res.json({ analysis });
     }
     catch (err) {
         next(err);

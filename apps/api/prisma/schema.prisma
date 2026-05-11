@@ -78,6 +78,7 @@ model Lead {
   status         String   @default("NOVO")
   priority       Int      @default(0)
   notes          String?
+  kanbanStage    String   @default("NOVO_LEAD")
   assignedUserId String?
   storeId        String?
   contactId      String?

@@ -32,6 +32,7 @@ export const getMe = () => api.get('/auth/me').then(r => r.data);
 
 // Dashboard
 export const getDashboardMetrics = () => api.get('/dashboard/metrics').then(r => r.data);
+export const getDashboardCharts = (period: string) => api.get('/dashboard/charts', { params: { period } }).then(r => r.data);
 export const getLiveConversations = (params?: any) => api.get('/dashboard/live-conversations', { params }).then(r => r.data);
 export const getAutomationLogs = () => api.get('/dashboard/automation-logs').then(r => r.data);
 
@@ -48,6 +49,8 @@ export const updateConversationStatus = (id: string, status: string) => api.put(
 export const closeConversation = (id: string) => api.post(`/conversations/${id}/close`).then(r => r.data);
 export const waitConversation = (id: string) => api.post(`/conversations/${id}/wait`).then(r => r.data);
 export const markConversationRead = (id: string) => api.post(`/conversations/${id}/read`).then(r => r.data);
+export const getConversationAnalysis = (id: string) => api.get(`/conversations/${id}/analyze`).then(r => r.data);
+export const requestConversationAnalysis = (id: string) => api.post(`/conversations/${id}/analyze`).then(r => r.data);
 
 // Leads
 export const getLeads = (params?: any) => api.get('/leads', { params }).then(r => r.data);
@@ -93,6 +96,9 @@ export const testAI = (message: string, storeId?: string) =>
   api.post('/ai/test', { message, storeId }).then(r => r.data);
 export const getAiConfigs = () => api.get('/ai/config').then(r => r.data);
 export const saveAiConfig = (data: any) => api.post('/ai/config', data).then(r => r.data);
+
+// Settings
+export const getIntegrations = () => api.get('/settings/integrations').then(r => r.data);
 
 // Z-API
 export const getZapiConfigs = () => api.get('/zapi/config').then(r => r.data);

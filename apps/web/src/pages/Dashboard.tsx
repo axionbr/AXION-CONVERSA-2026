@@ -1,14 +1,24 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  MessageSquare, Users, Clock, CheckCircle, TrendingUp, Flame, Bot, Filter, Maximize2,
+  MessageSquare, Users, Clock, CheckCircle, TrendingUp, Flame, Bot, Filter, XCircle,
 } from 'lucide-react';
 import { getDashboardMetrics, getLiveConversations } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import ConversationCard from '../components/ConversationCard';
 import ConversationDrawer from '../components/ConversationDrawer';
+import DashboardCharts from '../components/DashboardCharts';
 import { cn } from '../lib/utils';
+
+const PERIODS = [
+  { key: 'today', label: 'Hoje' },
+  { key: '7d', label: '7 dias' },
+  { key: '30d', label: '30 dias' },
+  { key: 'month', label: 'Este mês' },
+] as const;
+
+type Period = typeof PERIODS[number]['key'];
 
 interface Metric {
   label: string;
@@ -22,6 +32,7 @@ export default function Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [newMessages, setNewMessages] = useState<Record<string, { content: string; id: string }>>({});
   const [filters, setFilters] = useState({ temperature: '', status: '' });
+  const [period, setPeriod] = useState<Period>('7d');
   const qc = useQueryClient();
 
   const { data: metrics } = useQuery({
@@ -50,11 +61,13 @@ export default function Dashboard() {
       }, 5000);
       qc.invalidateQueries({ queryKey: ['live-conversations'] });
       qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-charts'] });
     });
 
     socket.on('conversation:new', () => {
       qc.invalidateQueries({ queryKey: ['live-conversations'] });
       qc.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-charts'] });
     });
 
     return () => {
@@ -83,14 +96,33 @@ export default function Dashboard() {
           <h1 className="text-lg font-bold">Dashboard</h1>
           <p className="text-xs text-muted-foreground">Painel vivo de conversas em tempo real</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          <span className="text-xs text-muted-foreground">Ao vivo</span>
+        <div className="flex items-center gap-3">
+          {/* Filtro de período */}
+          <div className="flex items-center gap-1 bg-[#2a2a2a] border border-[#343434] rounded-lg p-1">
+            {PERIODS.map(p => (
+              <button
+                key={p.key}
+                onClick={() => setPeriod(p.key)}
+                className={cn(
+                  'px-3 py-1 rounded-md text-xs font-medium transition-all',
+                  period === p.key
+                    ? 'bg-primary text-white'
+                    : 'text-[#b3b3b3] hover:text-[#f5f5f5]'
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-xs text-muted-foreground">Ao vivo</span>
+          </div>
         </div>
       </div>
 
       <div className="flex-1 overflow-auto p-6 space-y-6">
-        {/* Metrics */}
+        {/* KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {metricCards.map((m) => (
             <motion.div
@@ -108,7 +140,10 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* Filters */}
+        {/* Gráficos */}
+        <DashboardCharts period={period} />
+
+        {/* Filtros de conversa */}
         <div className="flex items-center gap-2 flex-wrap">
           <Filter className="w-4 h-4 text-muted-foreground" />
           <select
@@ -130,19 +165,20 @@ export default function Dashboard() {
           {(filters.temperature || filters.status) && (
             <button
               onClick={() => setFilters({ temperature: '', status: '' })}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
+              <XCircle className="w-3 h-3" />
               Limpar filtros
             </button>
           )}
           <span className="text-xs text-muted-foreground ml-auto">
-            {conversations.length} conversa{conversations.length !== 1 ? 's' : ''}
+            {conversations.length} conversa{conversations.length !== 1 ? 's' : ''} ativa{conversations.length !== 1 ? 's' : ''}
           </span>
         </div>
 
-        {/* Conversations Grid */}
+        {/* Grid de conversas ativas */}
         {conversations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="flex flex-col items-center justify-center py-16 text-center">
             <MessageSquare className="w-12 h-12 text-muted-foreground/30 mb-3" />
             <p className="text-muted-foreground">Nenhuma conversa ativa</p>
             <p className="text-sm text-muted-foreground/60">As conversas aparecerão aqui em tempo real</p>

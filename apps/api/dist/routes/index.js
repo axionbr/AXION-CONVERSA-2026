@@ -17,6 +17,7 @@ const ai_1 = __importDefault(require("./ai"));
 const zapi_1 = __importDefault(require("./zapi"));
 const webhooks_1 = __importDefault(require("./webhooks"));
 const flows_1 = __importDefault(require("./flows"));
+const settings_1 = __importDefault(require("./settings"));
 const router = (0, express_1.Router)();
 router.use('/auth', auth_1.default);
 router.use('/users', users_1.default);
@@ -31,5 +32,6 @@ router.use('/ai', ai_1.default);
 router.use('/zapi', zapi_1.default);
 router.use('/webhooks', webhooks_1.default);
 router.use('/flows', flows_1.default);
+router.use('/settings', settings_1.default);
 exports.default = router;
 //# sourceMappingURL=index.js.map

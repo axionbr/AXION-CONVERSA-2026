@@ -46,7 +46,9 @@ export function emitNewMessage(conversationId: string, message: any) {
 }
 
 export function emitConversationUpdate(conversationId: string, data: any) {
-  getIO().to('dashboard').emit('conversation:updated', { conversationId, ...data });
+  const payload = { conversationId, ...data };
+  getIO().to('dashboard').emit('conversation:updated', payload);
+  getIO().to(`conv:${conversationId}`).emit('conversation:updated', payload);
 }
 
 export function emitNewConversation(data: any) {

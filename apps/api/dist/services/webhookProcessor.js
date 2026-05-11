@@ -11,10 +11,10 @@ const OPEN_STATUSES = ['NOVO', 'EM_ATENDIMENTO', 'AGUARDANDO_CLIENTE'];
 const AI_BLOCKED_MODES = ['HUMANO', 'PAUSADO'];
 const AI_BLOCKED_STATUSES = ['FECHADO'];
 function extractPayload(payload) {
-    // Só processa ReceivedCallback; ignora SentCallback, DeliveryCallback etc.
+    // Apenas ReceivedCallback; ignora SentCallback, DeliveryCallback etc.
     if (payload.type && payload.type !== 'ReceivedCallback')
         return null;
-    // Ignorar mensagens enviadas pelo próprio número (evita loop infinito)
+    // Ignorar mensagens enviadas pelo proprio numero (evita loop infinito)
     if (payload.fromMe === true)
         return null;
     // Ignorar grupos
@@ -23,7 +23,6 @@ function extractPayload(payload) {
     const rawPhoneStr = payload.phone || payload.from || '';
     if (!rawPhoneStr)
         return null;
-    // Suporte a diferentes estruturas de payload Z-API
     const content = payload.text?.message ||
         payload.body ||
         payload.message?.conversation ||
@@ -48,29 +47,30 @@ async function processZapiWebhook(payload) {
     try {
         const extracted = extractPayload(payload);
         if (!extracted) {
-            console.log('[WEBHOOK] Payload descartado (fromMe, grupo, tipo não-inbound ou sem conteúdo)');
+            console.log('[WEBHOOK] Payload descartado (fromMe, grupo, tipo nao-inbound ou sem conteudo)');
             return;
         }
         const { normalizedPhone, rawPhone, content, messageId, senderName } = extracted;
         console.log(`[WEBHOOK] Mensagem inbound | de: ${normalizedPhone} | "${content.substring(0, 80)}"`);
-        // ── 1. Contato ────────────────────────────────────────────────────────────
+        // 1. Contato
         let contact = await prisma.contact.findUnique({ where: { phone: normalizedPhone } });
         if (!contact) {
             contact = await prisma.contact.create({
                 data: { name: senderName, phone: normalizedPhone },
             });
+            console.log(`[WEBHOOK] Novo contato criado | id: ${contact.id} | nome: ${senderName}`);
         }
         else if (contact.name !== senderName && senderName !== normalizedPhone) {
             await prisma.contact.update({ where: { id: contact.id }, data: { name: senderName } });
         }
-        // ── 2. Loja e atendente padrão ────────────────────────────────────────────
+        // 2. Loja e atendente padrao
         const defaultStore = await prisma.store.findFirst({ where: { active: true } });
         const defaultUser = defaultStore
             ? await prisma.user.findFirst({
                 where: { storeId: defaultStore.id, role: { in: ['VENDEDOR', 'ATENDENTE'] }, active: true },
             })
             : null;
-        // ── 3. Lead ───────────────────────────────────────────────────────────────
+        // 3. Lead
         let lead = await prisma.lead.findFirst({ where: { phone: normalizedPhone } });
         const isNewLead = !lead;
         if (!lead) {
@@ -84,8 +84,9 @@ async function processZapiWebhook(payload) {
                     assignedUserId: defaultUser?.id,
                 },
             });
+            console.log(`[WEBHOOK] Novo lead criado | id: ${lead.id}`);
         }
-        // ── 4. Conversa ───────────────────────────────────────────────────────────
+        // 4. Conversa
         let conversation = await prisma.conversation.findFirst({
             where: { contactId: contact.id, status: { in: OPEN_STATUSES } },
             orderBy: { createdAt: 'desc' },
@@ -99,17 +100,21 @@ async function processZapiWebhook(payload) {
                     storeId: defaultStore?.id,
                     assignedUserId: defaultUser?.id,
                     status: 'NOVO',
+                    aiEnabled: false,
+                    mode: 'HUMANO',
                     lastMessageAt: new Date(),
                 },
             });
+            console.log(`[WEBHOOK] Nova conversa criada | id: ${conversation.id} | atendente: ${defaultUser?.id ?? 'nenhum'}`);
         }
         else if (conversation.status === 'AGUARDANDO_CLIENTE') {
             await prisma.conversation.update({
                 where: { id: conversation.id },
                 data: { status: 'EM_ATENDIMENTO' },
             });
+            console.log(`[WEBHOOK] Conversa reaberta | id: ${conversation.id}`);
         }
-        // ── 5. Salvar mensagem INBOUND ────────────────────────────────────────────
+        // 5. Salvar mensagem INBOUND
         const message = await prisma.message.create({
             data: {
                 conversationId: conversation.id,
@@ -125,26 +130,7 @@ async function processZapiWebhook(payload) {
             data: { lastMessageAt: new Date(), unreadCount: { increment: 1 } },
         });
         console.log(`[WEBHOOK] Mensagem salva | msg: ${message.id} | conversa: ${conversation.id}`);
-        // ── 6. Classificação de intenção ──────────────────────────────────────────
-        const classification = await (0, aiService_1.classifyIntentAndTemperature)(content);
-        await prisma.lead.update({
-            where: { id: lead.id },
-            data: {
-                temperature: classification.temperature,
-                score: Math.max(lead.score, classification.score),
-            },
-        });
-        // ── 7. Log de automação ───────────────────────────────────────────────────
-        await prisma.automationLog.create({
-            data: {
-                type: 'WEBHOOK_RECEIVED',
-                description: `Mensagem recebida de ${normalizedPhone}`,
-                data: JSON.stringify({ classification }),
-                conversationId: conversation.id,
-                leadId: lead.id,
-            },
-        });
-        // ── 8. Socket.IO em tempo real ────────────────────────────────────────────
+        // 6. Socket.IO — emitir IMEDIATAMENTE apos salvar, antes de qualquer pipeline lenta
         const msgPayload = {
             id: message.id,
             conversationId: conversation.id,
@@ -157,36 +143,56 @@ async function processZapiWebhook(payload) {
         (0, socket_1.emitNewMessage)(conversation.id, msgPayload);
         if (isNewConversation) {
             (0, socket_1.emitNewConversation)({ conversationId: conversation.id, contact, lead });
+            console.log(`[INBOX] Nova conversa emitida via socket | id: ${conversation.id}`);
         }
         else {
             (0, socket_1.emitConversationUpdate)(conversation.id, {
                 lastMessageAt: new Date(),
                 unreadCount: (conversation.unreadCount ?? 0) + 1,
-                temperature: classification.temperature,
             });
+            console.log(`[INBOX] Conversa atualizada via socket | id: ${conversation.id}`);
         }
-        // ── 9. Gatilhos de fluxo ──────────────────────────────────────────────────
+        // 7. Classificacao de intencao (local, nunca falha)
+        const classification = await (0, aiService_1.classifyIntentAndTemperature)(content);
+        await prisma.lead.update({
+            where: { id: lead.id },
+            data: {
+                temperature: classification.temperature,
+                score: Math.max(lead.score, classification.score),
+            },
+        });
+        // 8. Log de automacao
+        await prisma.automationLog.create({
+            data: {
+                type: 'WEBHOOK_RECEIVED',
+                description: `Mensagem recebida de ${normalizedPhone}`,
+                data: JSON.stringify({ classification }),
+                conversationId: conversation.id,
+                leadId: lead.id,
+            },
+        });
+        // 9. Gatilhos de fluxo
         await (0, flowEngine_1.triggerFlowsByEvent)('KEYWORD', content, conversation.id, lead.id);
         if (isNewLead) {
             await (0, flowEngine_1.triggerFlowsByEvent)('FIRST_MESSAGE', content, conversation.id, lead.id);
             await (0, flowEngine_1.triggerFlowsByEvent)('LEAD_CREATED', content, conversation.id, lead.id);
         }
-        // ── 10. Verificar se IA deve responder ────────────────────────────────────
+        // 10. Verificar se IA deve responder
         const freshConv = await prisma.conversation.findUnique({ where: { id: conversation.id } });
         if (!freshConv?.aiEnabled) {
-            console.log('[IA] IA desabilitada nesta conversa — sem resposta automática');
+            console.log('[IA] IA desabilitada nesta conversa — atendimento manual ativo');
             return;
         }
         if (AI_BLOCKED_MODES.includes(freshConv.mode)) {
-            console.log(`[IA] Modo "${freshConv.mode}" bloqueia resposta automática`);
+            console.log(`[IA] Modo "${freshConv.mode}" bloqueia resposta automatica`);
             return;
         }
         if (AI_BLOCKED_STATUSES.includes(freshConv.status)) {
-            console.log(`[IA] Status "${freshConv.status}" bloqueia resposta automática`);
+            console.log(`[IA] Status "${freshConv.status}" bloqueia resposta automatica`);
             return;
         }
-        console.log(`[IA] Chamando Claude | conversa: ${conversation.id} | modo: ${freshConv.mode}`);
-        // ── 11. Montar histórico e chamar IA ──────────────────────────────────────
+        console.log(`[IA] Chamando IA | conversa: ${conversation.id} | modo: ${freshConv.mode}`);
+        // 11. Montar historico e chamar IA
         const recentMessages = await prisma.message.findMany({
             where: { conversationId: conversation.id },
             orderBy: { createdAt: 'asc' },
@@ -201,15 +207,15 @@ async function processZapiWebhook(payload) {
             aiReply = await (0, aiService_1.generateAiResponse)(conversation.id, chatHistory, conversation.storeId);
         }
         catch (aiErr) {
-            console.error('[IA] Erro ao chamar Claude:', aiErr.message);
+            console.error('[IA] Erro ao chamar IA:', aiErr.message);
             return;
         }
         if (!aiReply) {
-            console.warn('[IA] Claude retornou resposta vazia — pulando envio');
+            console.warn('[IA] IA retornou resposta vazia — pulando envio');
             return;
         }
         console.log(`[IA] Resposta gerada: "${aiReply.substring(0, 100)}"`);
-        // ── 12. Salvar mensagem OUTBOUND ──────────────────────────────────────────
+        // 12. Salvar mensagem OUTBOUND da IA
         const aiMessage = await prisma.message.create({
             data: {
                 conversationId: conversation.id,
@@ -219,15 +225,15 @@ async function processZapiWebhook(payload) {
                 senderType: 'AI',
             },
         });
-        // ── 13. Enviar via Z-API usando rawPhone (com DDI "55") ───────────────────
+        // 13. Enviar via Z-API usando rawPhone (com DDI "55")
         try {
             await (0, zapiService_1.sendTextMessage)(rawPhone, aiReply, conversation.storeId);
-            console.log(`[ZAPI] Mensagem enviada com sucesso para ${rawPhone}`);
+            console.log(`[ZAPI] Mensagem IA enviada para ${rawPhone}`);
         }
         catch (zapErr) {
             console.error(`[ZAPI] Falha ao enviar para ${rawPhone}:`, zapErr.message);
         }
-        // ── 14. Emitir resposta da IA em tempo real ───────────────────────────────
+        // 14. Emitir resposta da IA em tempo real
         (0, socket_1.emitNewMessage)(conversation.id, {
             id: aiMessage.id,
             conversationId: conversation.id,
