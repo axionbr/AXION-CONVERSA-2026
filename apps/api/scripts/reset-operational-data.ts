@@ -11,6 +11,10 @@
  *   VPS:    cd /var/www/axion-conversa && npx tsx apps/api/scripts/reset-operational-data.ts
  */
 
+import path from 'path';
+import { config as dotenvConfig } from 'dotenv';
+dotenvConfig({ path: path.join(__dirname, '../.env') });
+
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
