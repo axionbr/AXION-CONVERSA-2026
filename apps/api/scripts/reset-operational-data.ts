@@ -99,12 +99,12 @@ async function main() {
   console.log();
 
   // ─── 2. Confirmação manual ──────────────────────────────────────────────────
-  const env = process.env.FORCE_RESET;
-  if (env !== 'true') {
+  const env = process.env.RESET_CONFIRM;
+  if (env !== 'YES') {
     console.log(`  ${C.BOLD}Para confirmar o reset, rode:${C.RESET}`);
-    console.log(`  ${C.CYAN}FORCE_RESET=true npm run db:reset-operational${C.RESET}`);
+    console.log(`  ${C.CYAN}RESET_CONFIRM=YES npm run db:reset-operational${C.RESET}`);
     console.log();
-    console.log('  Abortando sem alterações.');
+    warn('Abortando sem alterar nenhum dado.');
     return;
   }
 

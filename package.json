@@ -16,7 +16,8 @@
     "start": "npm run start --workspace=apps/api",
     "db:migrate": "npm run db:migrate --workspace=apps/api",
     "db:seed": "npm run db:seed --workspace=apps/api",
-    "db:studio": "npm run db:studio --workspace=apps/api"
+    "db:studio": "npm run db:studio --workspace=apps/api",
+    "db:reset-operational": "npm run db:reset-operational --workspace=apps/api"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
