@@ -179,6 +179,7 @@ export async function processZapiWebhook(payload: any): Promise<void> {
 
     // 7. Classificacao de intencao (local, nunca falha)
     const classification = await classifyIntentAndTemperature(content);
+    const prevTemperature = lead.temperature;
     await prisma.lead.update({
       where: { id: lead.id },
       data:  {
@@ -186,6 +187,15 @@ export async function processZapiWebhook(payload: any): Promise<void> {
         score:       Math.max(lead.score, classification.score),
       },
     });
+
+    // Trigger LEAD_HOT quando temperatura escala para QUENTE ou URGENTE
+    if (
+      (classification.temperature === 'QUENTE' || classification.temperature === 'URGENTE') &&
+      prevTemperature !== classification.temperature
+    ) {
+      console.log(`[WEBHOOK] Lead quente detectado | lead: ${lead.id} | temp: ${classification.temperature}`);
+      await triggerFlowsByEvent('LEAD_HOT', classification.temperature, conversation.id, lead.id);
+    }
 
     // 8. Log de automacao
     await prisma.automationLog.create({

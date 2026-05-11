@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { Phone, User, Flame, TrendingUp, MoreHorizontal, Plus, Search } from 'lucide-react';
+import { Phone, User, Plus, Search, MessageSquare, ChevronRight } from 'lucide-react';
 import { getLeads, updateLead } from '../lib/api';
-import { cn, temperatureColor, temperatureIcon } from '../lib/utils';
+import { cn, temperatureColor, temperatureIcon, timeAgo } from '../lib/utils';
 
 const COLUMNS = [
   { key: 'NOVO_LEAD',            label: 'Novo Lead',          color: 'border-blue-500/40',   header: 'bg-blue-500/10',  dot: 'bg-blue-400' },
@@ -20,8 +20,20 @@ const SOURCE_LABELS: Record<string, string> = {
   Site: 'Site', Indicacao: 'Indicacao', Loja: 'Loja',
 };
 
+function parseProximaAcao(lead: any): string | null {
+  const logData = lead.automationLogs?.[0]?.data;
+  if (!logData) return null;
+  try {
+    const analysis = JSON.parse(logData);
+    return analysis.proximaAcao ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function LeadCard({ lead, onDragStart }: { lead: any; onDragStart: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
+  const lastMsg     = lead.conversations?.[0]?.messages?.[0] ?? null;
+  const proximaAcao = parseProximaAcao(lead);
 
   return (
     <motion.div
@@ -70,7 +82,7 @@ function LeadCard({ lead, onDragStart }: { lead: any; onDragStart: (id: string) 
       </div>
 
       {/* Responsavel e regiao */}
-      <div className="flex items-center justify-between text-[10px] text-[#b3b3b3]">
+      <div className="flex items-center justify-between text-[10px] text-[#b3b3b3] mb-2">
         <div className="flex items-center gap-1">
           {lead.assignedUser ? (
             <>
@@ -85,6 +97,38 @@ function LeadCard({ lead, onDragStart }: { lead: any; onDragStart: (id: string) 
           <span className="truncate max-w-[80px]">{lead.region}</span>
         )}
       </div>
+
+      {/* Última mensagem */}
+      {lastMsg ? (
+        <div className="rounded-lg bg-[#343434] px-2.5 py-1.5 mb-2">
+          <div className="flex items-center gap-1 mb-0.5">
+            <MessageSquare className="w-2.5 h-2.5 text-[#b3b3b3]" />
+            <span className="text-[9px] text-[#b3b3b3] uppercase tracking-wider">Última mensagem</span>
+            <span className="text-[9px] text-[#b3b3b3] ml-auto">{timeAgo(lastMsg.createdAt)}</span>
+          </div>
+          <p className="text-[11px] text-[#f5f5f5] line-clamp-2 leading-relaxed">
+            {lastMsg.direction === 'OUTBOUND' && (
+              <span className="text-[#b3b3b3]">↩ </span>
+            )}
+            {lastMsg.content}
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-[#343434]/50 border border-dashed border-[#3a3a3a] px-2.5 py-1.5 mb-2">
+          <p className="text-[10px] text-[#b3b3b3]/60 text-center">Sem mensagens ainda</p>
+        </div>
+      )}
+
+      {/* Próxima ação (IA) */}
+      {proximaAcao && (
+        <div className="rounded-lg bg-primary/8 border border-primary/20 px-2.5 py-1.5">
+          <div className="flex items-center gap-1 mb-0.5">
+            <ChevronRight className="w-2.5 h-2.5 text-primary" />
+            <span className="text-[9px] text-primary uppercase tracking-wider font-medium">Próxima ação</span>
+          </div>
+          <p className="text-[11px] text-[#f5f5f5] line-clamp-2 leading-relaxed">{proximaAcao}</p>
+        </div>
+      )}
     </motion.div>
   );
 }

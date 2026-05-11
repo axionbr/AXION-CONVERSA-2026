@@ -4,6 +4,7 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 import { sendTextMessage } from '../services/zapiService';
 import { analyzeConversation } from '../services/aiService';
 import { emitNewMessage, emitConversationUpdate } from '../socket';
+import { triggerFlowsByEvent } from '../services/flowEngine';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -195,6 +196,12 @@ router.post('/:id/assume', async (req: AuthRequest, res, next) => {
       },
     });
     emitConversationUpdate(req.params.id, { mode: 'HUMANO', assignedUserId: req.user!.id, status: 'EM_ATENDIMENTO' });
+
+    if (conv.leadId) {
+      triggerFlowsByEvent('CONVERSATION_ASSIGNED', req.user!.id, conv.id, conv.leadId)
+        .catch((e: any) => console.error('[FLOW] CONVERSATION_ASSIGNED:', e.message));
+    }
+
     res.json(conv);
   } catch (err) { next(err); }
 });
@@ -219,6 +226,12 @@ router.post('/:id/close', async (req, res, next) => {
       data:  { status: 'FECHADO', aiEnabled: false },
     });
     emitConversationUpdate(req.params.id, { status: 'FECHADO' });
+
+    if (conv.leadId) {
+      triggerFlowsByEvent('CONVERSATION_CLOSED', '', conv.id, conv.leadId)
+        .catch((e: any) => console.error('[FLOW] CONVERSATION_CLOSED:', e.message));
+    }
+
     res.json(conv);
   } catch (err) { next(err); }
 });
@@ -269,6 +282,12 @@ router.post('/:id/transfer', async (req, res, next) => {
       data:  { assignedUserId: userId, mode: 'HUMANO', aiEnabled: false },
     });
     emitConversationUpdate(req.params.id, { assignedUserId: userId, mode: 'HUMANO' });
+
+    if (conv.leadId) {
+      triggerFlowsByEvent('CONVERSATION_ASSIGNED', userId as string, conv.id, conv.leadId)
+        .catch((e: any) => console.error('[FLOW] CONVERSATION_ASSIGNED (transfer):', e.message));
+    }
+
     res.json(conv);
   } catch (err) { next(err); }
 });

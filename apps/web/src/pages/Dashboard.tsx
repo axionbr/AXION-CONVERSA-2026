@@ -2,14 +2,15 @@ import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  MessageSquare, Users, Clock, CheckCircle, TrendingUp, Flame, Bot, Filter, XCircle,
+  MessageSquare, Users, Clock, CheckCircle, TrendingUp, Flame, Bot,
+  Filter, XCircle, Zap, ChevronDown, ChevronUp,
 } from 'lucide-react';
-import { getDashboardMetrics, getLiveConversations } from '../lib/api';
+import { getDashboardMetrics, getLiveConversations, getAutomationLogs } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import ConversationCard from '../components/ConversationCard';
 import ConversationDrawer from '../components/ConversationDrawer';
 import DashboardCharts from '../components/DashboardCharts';
-import { cn } from '../lib/utils';
+import { cn, timeAgo } from '../lib/utils';
 
 const PERIODS = [
   { key: 'today', label: 'Hoje' },
@@ -33,6 +34,7 @@ export default function Dashboard() {
   const [newMessages, setNewMessages] = useState<Record<string, { content: string; id: string }>>({});
   const [filters, setFilters] = useState({ temperature: '', status: '' });
   const [period, setPeriod] = useState<Period>('7d');
+  const [showLogs, setShowLogs] = useState(false);
   const qc = useQueryClient();
 
   const { data: metrics } = useQuery({
@@ -45,6 +47,13 @@ export default function Dashboard() {
     queryKey: ['live-conversations', filters],
     queryFn: () => getLiveConversations(filters),
     refetchInterval: 15_000,
+  });
+
+  const { data: automationLogs = [], refetch: refetchLogs } = useQuery({
+    queryKey: ['automation-logs'],
+    queryFn: getAutomationLogs,
+    enabled: showLogs,
+    staleTime: 30_000,
   });
 
   useEffect(() => {
@@ -200,6 +209,68 @@ export default function Dashboard() {
             </AnimatePresence>
           </motion.div>
         )}
+
+        {/* Logs de Automações */}
+        <div className="rounded-xl border border-[#343434] bg-[#2a2a2a] overflow-hidden">
+          <button
+            onClick={() => { setShowLogs(v => !v); if (!showLogs) refetchLogs(); }}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#343434]/50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-[#F97316]" />
+              <span className="text-sm font-semibold text-[#f5f5f5]">Logs de Automações</span>
+              {(automationLogs as any[]).length > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/20">
+                  {(automationLogs as any[]).length}
+                </span>
+              )}
+            </div>
+            {showLogs
+              ? <ChevronUp className="w-4 h-4 text-[#b3b3b3]" />
+              : <ChevronDown className="w-4 h-4 text-[#b3b3b3]" />
+            }
+          </button>
+
+          {showLogs && (
+            <div className="border-t border-[#343434] divide-y divide-[#343434]/50 max-h-64 overflow-y-auto">
+              {(automationLogs as any[]).length === 0 ? (
+                <p className="text-center text-[#b3b3b3] text-xs py-8">
+                  Nenhum log de automação ainda
+                </p>
+              ) : (
+                (automationLogs as any[]).map((log: any) => (
+                  <div key={log.id} className="px-4 py-2.5 flex items-start gap-3 hover:bg-[#343434]/30 transition-colors">
+                    <div className={cn(
+                      'mt-0.5 w-2 h-2 rounded-full shrink-0',
+                      log.type === 'AI_ANALYSIS'          ? 'bg-blue-400'   :
+                      log.type === 'AI_RESPONSE'          ? 'bg-purple-400' :
+                      log.type === 'WEBHOOK_RECEIVED'     ? 'bg-green-400'  :
+                      log.type === 'KANBAN_STAGE_CHANGED' ? 'bg-yellow-400' :
+                      log.type === 'LEAD_HOT'             ? 'bg-orange-400' :
+                      'bg-[#b3b3b3]'
+                    )} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                          {log.type}
+                        </span>
+                        <span className="text-[10px] text-[#b3b3b3] ml-auto shrink-0">
+                          {timeAgo(log.createdAt)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#f5f5f5] mt-0.5 truncate">{log.description}</p>
+                      {log.lead && (
+                        <p className="text-[10px] text-[#b3b3b3] mt-0.5">
+                          Lead: {log.lead.name} ({log.lead.phone})
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Drawer */}
