@@ -204,30 +204,35 @@ export default function Inbox() {
     onSuccess:  () => refetchAnalysis(),
   });
 
-  // ── Notificações pendentes no servidor (fallback se socket falhar) ────────────
-  useQuery({
-    queryKey: ['handoff-pending'],
-    queryFn:  getPendingHandoffs,
-    enabled:  !!me?.id,
-    onSuccess: (data: any[]) => {
-      setHandoffNotifs(prev => {
-        const existingIds = new Set(prev.map((n: any) => n.notificationId));
-        const newOnes = data
-          .filter((n: any) => !existingIds.has(n.id))
-          .map((n: any) => ({
-            notificationId:  n.id,
-            conversationId:  n.conversationId,
-            leadId:          n.leadId,
-            region:          n.region,
-            summary:         n.summary,
-            contact:         n.conversation?.contact,
-            leadTemperature: n.conversation?.lead?.temperature ?? 'QUENTE',
-            expiresAt:       n.expiresAt,
-          }));
-        return [...prev, ...newOnes];
-      });
-    },
-  } as any);
+  // ── Notificações pendentes — polling da API (fallback/reload seguro) ─────────
+  // onSuccess foi removido no TanStack Query v5; usar useEffect observando data
+  const { data: pendingHandoffs } = useQuery({
+    queryKey:        ['handoff-pending'],
+    queryFn:         getPendingHandoffs,
+    enabled:         !!me?.id,
+    refetchInterval: 30_000,  // revalida a cada 30s para pegar notificações perdidas
+  });
+
+  useEffect(() => {
+    if (!pendingHandoffs || !(pendingHandoffs as any[]).length) return;
+    setHandoffNotifs(prev => {
+      const existingIds = new Set(prev.map((n: any) => n.notificationId));
+      const newOnes = (pendingHandoffs as any[])
+        .filter((n: any) => !existingIds.has(n.id))
+        .map((n: any) => ({
+          notificationId:  n.id,
+          conversationId:  n.conversationId,
+          leadId:          n.leadId,
+          region:          n.region,
+          summary:         n.summary,
+          contact:         n.conversation?.contact,
+          leadTemperature: n.conversation?.lead?.temperature ?? 'QUENTE',
+          expiresAt:       n.expiresAt,
+        }));
+      if (!newOnes.length) return prev; // sem novidade → não re-renderiza
+      return [...prev, ...newOnes];
+    });
+  }, [pendingHandoffs]);
 
   useEffect(() => { setLocalMessages(messages); }, [messages]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [localMessages]);

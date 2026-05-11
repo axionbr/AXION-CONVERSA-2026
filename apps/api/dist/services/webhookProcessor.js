@@ -173,8 +173,8 @@ async function processZapiWebhook(payload) {
                     storeId: defaultStore?.id,
                     assignedUserId: defaultUser?.id,
                     status: 'NOVO',
-                    aiEnabled: false, // IA desabilitada por padrão → atendimento manual
-                    mode: 'HUMANO',
+                    aiEnabled: true, // IA ativa por padrão — responde automaticamente
+                    mode: 'IA_AUTOMATICA',
                     lastMessageAt: new Date(),
                 },
             });
@@ -270,17 +270,26 @@ async function processZapiWebhook(payload) {
                 .catch((e) => console.error(`${L.FLOW} | LEAD_CREATED error:`, e.message));
         }
         // ── PASSO 13 — Verificar se IA deve responder ─────────────────────────────
+        // Guarda-chuva: se esta mensagem acabou de elevar a temperatura para QUENTE/URGENTE,
+        // o handoff foi disparado (fire-and-forget). Bloquear aqui antes de chamar a IA para
+        // evitar race condition — sem depender do timing da atualização assíncrona do banco.
+        const tempJustBecameHot = (classification.temperature === 'QUENTE' || classification.temperature === 'URGENTE') &&
+            prevTemperature !== classification.temperature;
+        if (tempJustBecameHot) {
+            console.log(`${L.AI} | ignorada — handoff iniciado para lead ${classification.temperature} | conv: ${conversation.id}`);
+            return;
+        }
         const freshConv = await prisma.conversation.findUnique({ where: { id: conversation.id } });
         if (!freshConv?.aiEnabled) {
-            console.log(`${L.AI} | desabilitada | conv: ${conversation.id} | atendimento manual`);
+            console.log(`${L.AI} | desabilitada | conv: ${conversation.id}`);
             return;
         }
         if (AI_BLOCKED_MODES.includes(freshConv.mode)) {
-            console.log(`${L.AI} | ignorada | modo "${freshConv.mode}" bloqueia resposta automática`);
+            console.log(`${L.AI} | ignorada | modo "${freshConv.mode}" | conv: ${conversation.id}`);
             return;
         }
         if (AI_BLOCKED_STATUSES.includes(freshConv.status)) {
-            console.log(`${L.AI} | ignorada | status "${freshConv.status}" bloqueia resposta automática`);
+            console.log(`${L.AI} | ignorada | status "${freshConv.status}" | conv: ${conversation.id}`);
             return;
         }
         console.log(`${L.AI} | chamando | conv: ${conversation.id} | modo: ${freshConv.mode}`);
