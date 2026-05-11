@@ -132,7 +132,7 @@ async function createNotification(conversationId, leadId, userId, userName, regi
             userId,
         },
     });
-    console.log(`[HANDOFF] SELLER_NOTIFIED | vendedor: ${userName} | conv: ${conversationId} | expira: ${expiresAt.toISOString()}`);
+    console.log(`[SELLER_NOTIFIED] | vendedor: ${userName} | conv: ${conversationId} | expira: ${expiresAt.toISOString()}`);
     // Emite para a sala pessoal do vendedor
     (0, socket_1.emitToUser)(userId, 'handoff:notification', {
         notificationId: notif.id,

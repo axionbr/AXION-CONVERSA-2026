@@ -14,17 +14,30 @@ const AI_BLOCKED_STATUSES = ['FECHADO'];
 
 // ─── Prefixos de log padronizados ─────────────────────────────────────────────
 const L = {
-  RCV:  '[WEBHOOK_RECEIVED]',
-  DUP:  '[MESSAGE_DUPLICATED_IGNORED]',
-  IN:   '[MESSAGE_INBOUND_SAVED]',
-  OUT:  '[MESSAGE_OUTBOUND_DETECTED]',
-  ERR:  '[WEBHOOK_ERROR]',
-  AI:   '[IA]',
-  ZAPI: '[ZAPI]',
-  FLOW: '[FLOW]',
-  CONV: '[CONVERSA]',
-  LEAD: '[LEAD]',
-  CONT: '[CONTATO]',
+  // Webhook
+  RCV:     '[WEBHOOK_RECEIVED]',
+  DUP:     '[MESSAGE_DUPLICATED_IGNORED]',
+  IN:      '[MESSAGE_INBOUND_SAVED]',
+  OUT:     '[MESSAGE_OUTBOUND_DETECTED]',
+  ERR:     '[WEBHOOK_ERROR]',
+  // Entidades
+  CONT:    '[CONTATO]',
+  LEAD:    '[LEAD]',
+  CONV:    '[CONVERSA]',
+  // IA
+  AI:      '[IA]',
+  AI_ON:   '[IA_AUTO_ENABLED_ON_NEW_CONVERSATION]',
+  AI_GEN:  '[IA_RESPONSE_GENERATED]',    // emitido no aiService; aqui apenas referência
+  AI_SND:  '[IA_RESPONSE_SENT]',
+  AI_SKP:  '[IA_SKIPPED]',
+  AI_ERR:  '[IA_ERROR]',
+  // Handoff
+  HOT:     '[LEAD_HOT_DETECTED]',
+  HOFF:    '[HANDOFF_STARTED]',
+  SELL:    '[SELLER_NOTIFIED]',
+  // Demais
+  ZAPI:    '[ZAPI]',
+  FLOW:    '[FLOW]',
 };
 
 // ─── Tipos de callback Z-API que NÃO são mensagens inbound ───────────────────
@@ -213,6 +226,7 @@ export async function processZapiWebhook(payload: any): Promise<void> {
         },
       });
       console.log(`${L.CONV} | nova | id: ${conversation.id} | atendente: ${defaultUser?.id ?? 'nenhum'}`);
+      console.log(`${L.AI_ON} | conv: ${conversation.id} | modo: IA_AUTOMATICA`);
     } else if (conversation.status === 'AGUARDANDO_CLIENTE') {
       await prisma.conversation.update({
         where: { id: conversation.id },
@@ -280,11 +294,13 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       (classification.temperature === 'QUENTE' || classification.temperature === 'URGENTE') &&
       prevTemperature !== classification.temperature
     ) {
-      console.log(`${L.LEAD} | QUENTE detectado | lead: ${lead.id} | temp: ${classification.temperature}`);
+      console.log(`${L.HOT} | lead: ${lead.id} | temp: ${prevTemperature} → ${classification.temperature} | conv: ${conversation.id}`);
 
       // Trigger de fluxo
       triggerFlowsByEvent('LEAD_HOT', classification.temperature, conversation.id, lead.id)
         .catch((e: any) => console.error(`${L.FLOW} | LEAD_HOT error:`, e.message));
+
+      console.log(`${L.HOFF} | conv: ${conversation.id} | iniciando handoff IA → vendedor`);
 
       // Iniciar handoff IA → vendedor (fire-and-forget, não bloqueia pipeline)
       initiateHandoff(
@@ -331,22 +347,22 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       prevTemperature !== classification.temperature;
 
     if (tempJustBecameHot) {
-      console.log(`${L.AI} | ignorada — handoff iniciado para lead ${classification.temperature} | conv: ${conversation.id}`);
+      console.log(`${L.AI_SKP} | handoff iniciado para lead ${classification.temperature} | conv: ${conversation.id}`);
       return;
     }
 
     const freshConv = await prisma.conversation.findUnique({ where: { id: conversation.id } });
 
     if (!freshConv?.aiEnabled) {
-      console.log(`${L.AI} | desabilitada | conv: ${conversation.id}`);
+      console.log(`${L.AI_SKP} | aiEnabled=false | conv: ${conversation.id}`);
       return;
     }
     if (AI_BLOCKED_MODES.includes(freshConv.mode)) {
-      console.log(`${L.AI} | ignorada | modo "${freshConv.mode}" | conv: ${conversation.id}`);
+      console.log(`${L.AI_SKP} | modo "${freshConv.mode}" | conv: ${conversation.id}`);
       return;
     }
     if (AI_BLOCKED_STATUSES.includes(freshConv.status)) {
-      console.log(`${L.AI} | ignorada | status "${freshConv.status}" | conv: ${conversation.id}`);
+      console.log(`${L.AI_SKP} | status "${freshConv.status}" | conv: ${conversation.id}`);
       return;
     }
 
@@ -368,11 +384,11 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     try {
       aiReply = await generateAiResponse(conversation.id, chatHistory, conversation.storeId);
     } catch (aiErr: any) {
-      console.error(`${L.AI} | erro ao chamar IA:`, aiErr.message);
+      console.error(`${L.AI_ERR} | ${aiErr.message} | conv: ${conversation.id}`);
       await prisma.automationLog.create({
         data: {
           type:           'AI_ERROR',
-          description:    `Erro IA: ${aiErr.message}`,
+          description:    `${L.AI_ERR}: ${aiErr.message}`,
           conversationId: conversation.id,
           leadId:         lead.id,
         },
@@ -381,11 +397,12 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     }
 
     if (!aiReply || !aiReply.trim()) {
-      console.warn(`${L.AI} | resposta vazia — pulando envio`);
+      console.warn(`${L.AI_SKP} | resposta vazia | conv: ${conversation.id}`);
       return;
     }
 
-    console.log(`${L.AI} | resposta gerada: "${aiReply.substring(0, 100)}"`);
+    // IA_RESPONSE_GENERATED já logado dentro de aiService.ts
+    console.log(`${L.AI} | resposta: "${aiReply.substring(0, 100)}"`);
 
     // ── PASSO 15 — Salvar mensagem OUTBOUND da IA ─────────────────────────────
     const aiMessage = await prisma.message.create({
@@ -401,9 +418,9 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     // ── PASSO 16 — Enviar via Z-API (usa rawPhone com DDI "55") ───────────────
     try {
       await sendTextMessage(rawPhone, aiReply, conversation.storeId);
-      console.log(`${L.ZAPI} | IA enviada | para: ${rawPhone} | conv: ${conversation.id}`);
+      console.log(`${L.AI_SND} | via Z-API | para: ${rawPhone} | conv: ${conversation.id}`);
     } catch (zapErr: any) {
-      console.error(`${L.ZAPI} | falha ao enviar | para: ${rawPhone} |`, zapErr.message);
+      console.error(`${L.ZAPI} | falha ao enviar IA | para: ${rawPhone} |`, zapErr.message);
       // Não bloqueia — mensagem já foi salva no banco
     }
 

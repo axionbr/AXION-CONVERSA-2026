@@ -127,7 +127,7 @@ async function createNotification(
     },
   });
 
-  console.log(`[HANDOFF] SELLER_NOTIFIED | vendedor: ${userName} | conv: ${conversationId} | expira: ${expiresAt.toISOString()}`);
+  console.log(`[SELLER_NOTIFIED] | vendedor: ${userName} | conv: ${conversationId} | expira: ${expiresAt.toISOString()}`);
 
   // Emite para a sala pessoal do vendedor
   emitToUser(userId, 'handoff:notification', {

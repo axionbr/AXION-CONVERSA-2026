@@ -13,10 +13,34 @@ const client_1 = require("@prisma/client");
 const prisma = new client_1.PrismaClient();
 const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
-const DEFAULT_SYSTEM_PROMPT = 'Você é um assistente de atendimento comercial do WhatsApp. ' +
-    'Responda de forma cordial, direta e objetiva. ' +
-    'Seja breve (máximo 2-3 frases curtas). ' +
-    'Foque em entender a necessidade do cliente e conduzir para o próximo passo da venda.';
+// ─── Prompt comercial padrão — SDR/Consultora Tecle Motos ────────────────────
+const DEFAULT_SYSTEM_PROMPT = `Você é a Ana, consultora comercial da Tecle Motos, especialista em scooters e motos elétricas.
+
+COMO ATENDER:
+- Seja natural, cordial e objetivo. Nunca pareça um robô.
+- Faça UMA pergunta de cada vez.
+- Respostas curtas: no máximo 2-3 frases. Evite textos longos.
+- Não invente preços, estoque ou condições de pagamento.
+- Quando não souber: "Vou confirmar com nossa equipe e já te retorno 😊"
+- Use o nome do cliente assim que souber.
+- Emoji discreto, apenas quando natural.
+
+O QUE DESCOBRIR (de forma natural, sem parecer interrogatório):
+1. Nome do cliente (se ainda não informado)
+2. Cidade ou bairro (para indicar a unidade mais próxima)
+3. Modelo de interesse (scooter elétrica, moto elétrica, qual modelo)
+4. Uso: trabalho, lazer, deslocamento diário, delivery
+5. Urgência: está pesquisando ou quer comprar em breve
+6. Pagamento: à vista, cartão, financiamento
+
+FLUXO NATURAL:
+- Cumprimente e pergunte o nome se não informado
+- Entenda o que está procurando
+- Pergunte a cidade/região para indicar a loja mais próxima
+- Qualifique interesse, uso e urgência progressivamente
+- Quando o cliente demonstrar interesse real, prepare para conectar ao especialista
+
+Conduza com naturalidade. Seja consultivo, não robotizado. Nunca pressione.`;
 /** Valida se um nome de modelo pertence ao Claude/Anthropic. */
 function isClaudeModel(model) {
     return model.startsWith('claude-') || model.startsWith('claude3');
@@ -60,7 +84,11 @@ async function generateAiResponse(conversationId, messages, storeId) {
             messages: messages.map(m => ({ role: m.role, content: m.content })),
         });
         const block = response.content[0];
-        return block.type === 'text' ? block.text.trim() : '';
+        const reply = block.type === 'text' ? block.text.trim() : '';
+        if (reply) {
+            console.log(`[IA_RESPONSE_GENERATED] | Anthropic | conv: ${conversationId} | len: ${reply.length}`);
+        }
+        return reply;
     }
     else {
         // Garantir modelo OpenAI válido
@@ -78,7 +106,11 @@ async function generateAiResponse(conversationId, messages, storeId) {
                 ...messages,
             ],
         });
-        return (response.choices[0]?.message?.content ?? '').trim();
+        const reply = (response.choices[0]?.message?.content ?? '').trim();
+        if (reply) {
+            console.log(`[IA_RESPONSE_GENERATED] | OpenAI | conv: ${conversationId} | len: ${reply.length}`);
+        }
+        return reply;
     }
 }
 async function analyzeConversation(messages, storeId) {
@@ -180,10 +212,30 @@ ${historyText}`;
 }
 async function classifyIntentAndTemperature(text) {
     const keywords = {
-        URGENTE: ['urgente', 'agora', 'hoje', 'preciso muito', 'emergência', 'imediato'],
-        QUENTE: ['comprar', 'fechar', 'quanto', 'preço', 'valor', 'parcela', 'financiamento', 'disponível'],
-        MORNO: ['interesse', 'quero', 'gostaria', 'pensando', 'considerando', 'talvez'],
-        FRIO: ['informação', 'dúvida', 'curiosidade', 'apenas perguntando'],
+        URGENTE: [
+            'urgente', 'agora', 'hoje', 'preciso muito', 'emergência', 'imediato',
+            'quero fechar', 'vou fechar', 'comprar hoje', 'fechar hoje', 'quero agora',
+        ],
+        QUENTE: [
+            // Interesse financeiro
+            'comprar', 'fechar', 'quanto', 'preço', 'valor', 'parcela', 'financiamento',
+            'entrada', 'prestação', 'orçamento', 'proposta', 'condição', 'pagamento',
+            // Disponibilidade / loja
+            'disponível', 'disponibilidade', 'tem estoque', 'tem em estoque',
+            'endereço', 'loja', 'onde fica', 'qual endereço', 'visitar', 'ver pessoalmente',
+            // Intenção de falar com vendedor
+            'falar com vendedor', 'falar com especialista', 'quero falar', 'me passa contato',
+            'me indica', 'me conecta', 'falar com alguém',
+        ],
+        MORNO: [
+            'interesse', 'quero', 'gostaria', 'pensando', 'considerando', 'talvez',
+            'pesquisando', 'comparando', 'estou vendo', 'tenho interesse',
+            'queria saber mais', 'me conta mais', 'pode me explicar',
+        ],
+        FRIO: [
+            'informação', 'dúvida', 'curiosidade', 'apenas perguntando', 'só queria saber',
+            'só uma dúvida', 'pode tirar uma dúvida',
+        ],
     };
     const lowerText = text.toLowerCase();
     let temperature = 'FRIO';
