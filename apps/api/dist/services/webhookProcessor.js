@@ -179,6 +179,7 @@ async function processZapiWebhook(payload) {
         });
         const isNewConversation = !conversation;
         if (!conversation) {
+            // ── 6a. Conversa nova ─────────────────────────────────────────────────
             conversation = await prisma.conversation.create({
                 data: {
                     contactId: contact.id,
@@ -194,12 +195,47 @@ async function processZapiWebhook(payload) {
             console.log(`${L.CONV} | nova | id: ${conversation.id} | atendente: ${defaultUser?.id ?? 'nenhum'}`);
             console.log(`${L.AI_ON} | conv: ${conversation.id} | modo: IA_AUTOMATICA`);
         }
-        else if (conversation.status === 'AGUARDANDO_CLIENTE') {
-            await prisma.conversation.update({
-                where: { id: conversation.id },
-                data: { status: 'EM_ATENDIMENTO' },
-            });
-            console.log(`${L.CONV} | reaberta (voltou de AGUARDANDO_CLIENTE) | id: ${conversation.id}`);
+        else {
+            // ── 6b. Conversa existente — verificar se IA precisa ser (re)ativada ──
+            // Vendedor ativo = alguém assumiu e está em EM_ATENDIMENTO modo HUMANO
+            const vendorActive = conversation.mode === 'HUMANO' && conversation.status === 'EM_ATENDIMENTO';
+            // Handoff pendente = aguardando vendedor aceitar
+            const pendingHandoff = conversation.mode === 'AGUARDANDO_HUMANO';
+            if (conversation.status === 'AGUARDANDO_CLIENTE') {
+                if (!vendorActive && !pendingHandoff) {
+                    // Cliente respondeu sem vendedor ativo → reativar IA automática
+                    await prisma.conversation.update({
+                        where: { id: conversation.id },
+                        data: { status: 'EM_ATENDIMENTO', aiEnabled: true, mode: 'IA_AUTOMATICA' },
+                    });
+                    (0, socket_1.emitConversationUpdate)(conversation.id, { mode: 'IA_AUTOMATICA', aiEnabled: true, status: 'EM_ATENDIMENTO' });
+                    console.log(`[CONVERSATION_REOPENED_WITH_AI] | conv: ${conversation.id} | AGUARDANDO_CLIENTE → IA_AUTOMATICA`);
+                    console.log(`${L.AI_ON} | conv: ${conversation.id}`);
+                }
+                else {
+                    // Vendedor ativo → apenas reabrir status, manter modo humano
+                    await prisma.conversation.update({
+                        where: { id: conversation.id },
+                        data: { status: 'EM_ATENDIMENTO' },
+                    });
+                    console.log(`${L.CONV} | reaberta c/ vendedor ativo | id: ${conversation.id}`);
+                }
+            }
+            else if (!pendingHandoff && !vendorActive && !conversation.aiEnabled) {
+                // Conversa antiga em modo HUMANO (pré-correção ou manual) sem vendedor ativo
+                // → reativar IA automática para este novo atendimento
+                await prisma.conversation.update({
+                    where: { id: conversation.id },
+                    data: { aiEnabled: true, mode: 'IA_AUTOMATICA' },
+                });
+                (0, socket_1.emitConversationUpdate)(conversation.id, { mode: 'IA_AUTOMATICA', aiEnabled: true });
+                console.log(`[CONVERSATION_REOPENED_WITH_AI] | conv: ${conversation.id} | HUMANO → IA_AUTOMATICA`);
+                console.log(`${L.AI_ON} | conv: ${conversation.id}`);
+            }
+            // Casos onde NÃO alteramos:
+            //   pendingHandoff (AGUARDANDO_HUMANO) — aguardando vendedor
+            //   vendorActive   (EM_ATENDIMENTO + HUMANO) — vendedor está atendendo
+            //   aiEnabled já true — IA já ativa
         }
         // ── PASSO 7 — Salvar mensagem INBOUND ─────────────────────────────────────
         const message = await prisma.message.create({

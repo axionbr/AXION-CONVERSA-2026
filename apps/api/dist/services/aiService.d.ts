@@ -8,6 +8,14 @@ export interface ConversationAnalysis {
     resumo: string;
     proximaAcao: string;
     respostaSugerida: string;
+    nomeCliente?: string | null;
+    cidade?: string | null;
+    bairro?: string | null;
+    regiao?: string | null;
+    ddd?: string | null;
+    modeloInteresse?: string | null;
+    urgencia?: 'imediata' | 'proximas_semanas' | 'pesquisando' | null;
+    formaPagamento?: 'avista' | 'cartao' | 'financiamento' | 'consorcio' | null;
 }
 export declare function analyzeConversation(messages: Array<{
     direction: string;

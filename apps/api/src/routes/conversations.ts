@@ -315,6 +315,7 @@ router.post('/:id/analyze', async (req: AuthRequest, res, next) => {
       where: { id: req.params.id },
       include: {
         messages: { orderBy: { createdAt: 'asc' }, take: 30 },
+        lead:     { select: { id: true, name: true, region: true, interest: true } },
       },
     });
     if (!conv) return res.status(404).json({ error: 'Conversa nao encontrada' });
@@ -327,8 +328,8 @@ router.post('/:id/analyze', async (req: AuthRequest, res, next) => {
 
     const analysis = await analyzeConversation(
       conv.messages.map(m => ({
-        direction: m.direction,
-        content:   m.content,
+        direction:  m.direction,
+        content:    m.content,
         senderType: m.senderType,
       })),
       conv.storeId,
@@ -343,7 +344,41 @@ router.post('/:id/analyze', async (req: AuthRequest, res, next) => {
       },
     });
 
-    console.log(`[IA] Analise salva | conversa: ${conv.id} | tipo: ${analysis.tipo} | temp: ${analysis.temperatura}`);
+    // Persistir dados de qualificação extraídos no Lead
+    if (conv.leadId && conv.lead) {
+      const leadUpdate: Record<string, string> = {};
+
+      // Região: priorizar dados da análise, não sobrescrever se já existir dado mais específico
+      const regiaoExtraida = [analysis.cidade, analysis.bairro, analysis.regiao]
+        .filter(Boolean).join(' - ');
+      if (regiaoExtraida && !conv.lead.region) {
+        leadUpdate.region = regiaoExtraida;
+      }
+
+      // Interesse/modelo — sobrescrever se a análise identificou algo
+      if (analysis.modeloInteresse && analysis.modeloInteresse !== conv.lead.interest) {
+        leadUpdate.interest = analysis.modeloInteresse;
+      }
+
+      if (Object.keys(leadUpdate).length > 0) {
+        await prisma.lead.update({ where: { id: conv.leadId }, data: leadUpdate });
+        console.log(`[IA] Lead ${conv.leadId} atualizado com dados da análise:`, leadUpdate);
+      }
+
+      // Atualizar temperatura do lead se a análise identificou temperatura mais alta
+      const TEMP_ORDER = ['FRIO', 'MORNO', 'QUENTE', 'URGENTE'];
+      const currentIdx = TEMP_ORDER.indexOf(conv.lead ? (conv as any).lead?.temperature ?? 'FRIO' : 'FRIO');
+      const analysisIdx = TEMP_ORDER.indexOf(analysis.temperatura);
+      if (analysisIdx > currentIdx) {
+        await prisma.lead.update({
+          where: { id: conv.leadId },
+          data:  { temperature: analysis.temperatura },
+        });
+        console.log(`[IA] Lead temperatura atualizada: ${analysis.temperatura} | leadId: ${conv.leadId}`);
+      }
+    }
+
+    console.log(`[IA] Analise salva | conv: ${conv.id} | tipo: ${analysis.tipo} | temp: ${analysis.temperatura}`);
     res.json({ analysis });
   } catch (err) { next(err); }
 });

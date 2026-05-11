@@ -189,6 +189,12 @@ async function initiateHandoff(conversationId, lead, aiSummary) {
     });
     const allText = msgs.map(m => m.content).join(' ');
     const region = lead.region || extractRegion(allText);
+    // Persistir região extraída no Lead se ainda não estiver salva
+    if (region && !lead.region) {
+        await prisma.lead.update({ where: { id: lead.id }, data: { region } })
+            .catch(() => { });
+        console.log(`[HANDOFF] Região salva no lead | id: ${lead.id} | region: ${region}`);
+    }
     // 3. Enviar mensagem de transferência ao cliente pelo número central
     const rawPhone = `55${conv.contact.phone}`;
     try {

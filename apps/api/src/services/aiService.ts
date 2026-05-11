@@ -8,34 +8,34 @@ const prisma = new PrismaClient();
 const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 
-// ─── Prompt comercial padrão — SDR/Consultora Tecle Motos ────────────────────
+// ─── Prompt comercial — SDR/Consultora Tecle Motos ───────────────────────────
 const DEFAULT_SYSTEM_PROMPT = `Você é a Ana, consultora comercial da Tecle Motos, especialista em scooters e motos elétricas.
 
 COMO ATENDER:
-- Seja natural, cordial e objetivo. Nunca pareça um robô.
+- Seja natural e simpática. Nunca pareça um robô ou roteiro.
 - Faça UMA pergunta de cada vez.
-- Respostas curtas: no máximo 2-3 frases. Evite textos longos.
-- Não invente preços, estoque ou condições de pagamento.
-- Quando não souber: "Vou confirmar com nossa equipe e já te retorno 😊"
+- Mensagens curtas: máximo 2-3 frases. Nunca envie textão.
+- Nunca invente preço, estoque, prazo ou condição de pagamento.
+- Se não souber: "Vou confirmar com nossa equipe e já te retorno 😊"
 - Use o nome do cliente assim que souber.
-- Emoji discreto, apenas quando natural.
+- Emoji discreto, apenas quando natural (máximo 1 por mensagem).
+- Linguagem brasileira informal e amigável.
 
-O QUE DESCOBRIR (de forma natural, sem parecer interrogatório):
-1. Nome do cliente (se ainda não informado)
-2. Cidade ou bairro (para indicar a unidade mais próxima)
-3. Modelo de interesse (scooter elétrica, moto elétrica, qual modelo)
-4. Uso: trabalho, lazer, deslocamento diário, delivery
-5. Urgência: está pesquisando ou quer comprar em breve
-6. Pagamento: à vista, cartão, financiamento
+QUALIFICAÇÃO (de forma natural, sem parecer interrogatório):
+1. Nome do cliente — se ainda não apresentado
+2. Cidade, bairro ou região — para indicar a unidade mais próxima
+3. Modelo ou tipo de interesse — scooter elétrica, moto elétrica, qual modelo
+4. Uso pretendido — trabalho, lazer, deslocamento, entrega/delivery
+5. Urgência — só está pesquisando, ou quer comprar em breve?
+6. Pagamento — à vista, cartão, financiamento, consórcio
 
-FLUXO NATURAL:
-- Cumprimente e pergunte o nome se não informado
-- Entenda o que está procurando
-- Pergunte a cidade/região para indicar a loja mais próxima
-- Qualifique interesse, uso e urgência progressivamente
-- Quando o cliente demonstrar interesse real, prepare para conectar ao especialista
+QUANDO TRANSFERIR PARA ESPECIALISTA:
+Quando o cliente demonstrar intenção clara (perguntou preço/parcela/financiamento,
+pediu endereço da loja, quer ver pessoalmente, perguntou disponibilidade, disse
+"quero fechar" ou "vou aí"), prepare para conectar ao especialista de vendas.
 
-Conduza com naturalidade. Seja consultivo, não robotizado. Nunca pressione.`;
+Conduza com naturalidade. Seja consultivo e acolhedor. Nunca pressione.
+Seu objetivo é entender a necessidade do cliente e conectá-lo ao especialista certo.`;
 
 /** Valida se um nome de modelo pertence ao Claude/Anthropic. */
 function isClaudeModel(model: string): boolean {
@@ -131,6 +131,15 @@ export interface ConversationAnalysis {
   resumo: string;
   proximaAcao: string;
   respostaSugerida: string;
+  // Dados de qualificação extraídos da conversa (opcionais)
+  nomeCliente?:    string | null;
+  cidade?:         string | null;
+  bairro?:         string | null;
+  regiao?:         string | null;
+  ddd?:            string | null;
+  modeloInteresse?: string | null;
+  urgencia?:       'imediata' | 'proximas_semanas' | 'pesquisando' | null;
+  formaPagamento?: 'avista' | 'cartao' | 'financiamento' | 'consorcio' | null;
 }
 
 export async function analyzeConversation(
@@ -145,16 +154,28 @@ export async function analyzeConversation(
     })
     .join('\n');
 
-  const analysisPrompt = `Analise esta conversa de WhatsApp e retorne um JSON com EXATAMENTE estas chaves:
+  const analysisPrompt = `Analise esta conversa de WhatsApp comercial e retorne um JSON com EXATAMENTE estas chaves:
 {
   "tipo": "venda|suporte|orcamento|reclamacao|informacao|outro",
   "temperatura": "FRIO|MORNO|QUENTE|URGENTE",
-  "resumo": "resumo em até 2 frases do que o cliente quer",
-  "proximaAcao": "acao especifica que o atendente deve fazer agora",
-  "respostaSugerida": "mensagem pronta para responder ao cliente em portugues do Brasil, cordial e direta"
+  "resumo": "resumo em 1-2 frases do que o cliente quer ou precisa",
+  "proximaAcao": "acao específica e objetiva que o atendente deve fazer agora",
+  "respostaSugerida": "mensagem pronta para responder ao cliente, natural, cordial, em português do Brasil",
+  "nomeCliente": "nome do cliente se mencionado, caso contrário null",
+  "cidade": "cidade mencionada ou inferida, caso contrário null",
+  "bairro": "bairro mencionado, caso contrário null",
+  "regiao": "região, estado ou área geográfica identificada, caso contrário null",
+  "ddd": "DDD identificado no número ou na conversa, caso contrário null",
+  "modeloInteresse": "modelo ou tipo de veículo de interesse mencionado, caso contrário null",
+  "urgencia": "imediata|proximas_semanas|pesquisando|null",
+  "formaPagamento": "avista|cartao|financiamento|consorcio|null"
 }
 
-RESPONDA APENAS COM O JSON. SEM MARKDOWN. SEM TEXTO ADICIONAL.
+REGRAS:
+- RESPONDA APENAS COM O JSON. SEM MARKDOWN. SEM TEXTO ADICIONAL.
+- Para campos não identificados, use null (não use string vazia).
+- temperatura QUENTE: cliente perguntou preço, financiamento, disponibilidade, endereço, quer comprar agora ou disse "quero fechar"
+- temperatura URGENTE: cliente disse "agora", "hoje", "urgente", "vou aí hoje"
 
 Conversa:
 ${historyText}`;
@@ -229,7 +250,16 @@ ${historyText}`;
     proximaAcao: temperature === 'URGENTE' ? 'Atender imediatamente — lead urgente'
                : temperature === 'QUENTE'  ? 'Entrar em contato rapidamente — interesse alto'
                : 'Responder ao cliente e qualificar necessidade',
-    respostaSugerida: 'Ola! Obrigado por entrar em contato. Como posso te ajudar hoje?',
+    respostaSugerida: 'Olá! Obrigado por entrar em contato. Como posso te ajudar hoje?',
+    // Campos de qualificação — null no fallback (sem IA disponível)
+    nomeCliente:    null,
+    cidade:         null,
+    bairro:         null,
+    regiao:         null,
+    ddd:            null,
+    modeloInteresse: null,
+    urgencia:       null,
+    formaPagamento: null,
   };
 }
 
