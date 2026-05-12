@@ -12,8 +12,8 @@ export const config = {
   frontendUrl:     process.env.FRONTEND_URL      || 'http://localhost:5173',
   openaiApiKey:    process.env.OPENAI_API_KEY    || '',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
-  aiProvider:      (process.env.AI_PROVIDER || 'openai') as 'openai' | 'anthropic',
-  aiModel:         process.env.AI_MODEL          || 'gpt-4o-mini',
+  aiProvider:      (process.env.AI_PROVIDER || 'anthropic') as 'openai' | 'anthropic',
+  aiModel:         process.env.AI_MODEL          || 'claude-haiku-4-5-20251001',
   zapi: {
     instanceId:  process.env.ZAPI_INSTANCE_ID  || '',
     token:       process.env.ZAPI_TOKEN        || '',
@@ -39,8 +39,8 @@ export function validateProductionConfig(): void {
     console.warn('[SEGURANÇA] Recomendado: defina WEBHOOK_SECRET no .env para proteger o endpoint.');
   }
 
-  if (isProduction && !config.anthropicApiKey && !config.openaiApiKey) {
-    console.warn('[IA] Nenhuma chave de IA configurada — ANTHROPIC_API_KEY e OPENAI_API_KEY ausentes.');
-    console.warn('[IA] IA usará classificação por palavras-chave apenas (modo offline).');
+  if (isProduction && !config.anthropicApiKey) {
+    console.warn('[IA] ANTHROPIC_API_KEY não definida — IA usará classificação por palavras-chave apenas (modo offline).');
+    console.warn('[IA] Configure ANTHROPIC_API_KEY no .env para ativar o motor comercial Claude.');
   }
 }

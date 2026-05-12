@@ -11,54 +11,25 @@ router.get('/integrations', async (_req, res, next) => {
     try {
         const zapiConfig = await prisma.zapiConfig.findFirst({ where: { active: true } });
         const zapiOk = !!(zapiConfig?.instanceId && zapiConfig?.token);
+        // Modelo efetivo: prioriza o salvo na AiConfig global; fallback ao env
+        const aiConfig = await prisma.aiConfig.findFirst({ where: { storeId: null } });
+        const effectiveModel = aiConfig?.model || config_1.config.aiModel;
+        const isClaudeModel = effectiveModel.startsWith('claude-');
+        const claudeOk = !!config_1.config.anthropicApiKey;
         res.json({
+            claude: {
+                label: 'Anthropic Claude',
+                configured: claudeOk,
+                detail: claudeOk
+                    ? `Modelo: ${isClaudeModel ? effectiveModel : 'claude-haiku-4-5-20251001'}`
+                    : 'ANTHROPIC_API_KEY não definida no .env',
+                docsUrl: 'https://docs.anthropic.com',
+            },
             zapi: {
                 label: 'Z-API WhatsApp',
                 configured: zapiOk,
-                detail: zapiOk ? `Instancia: ${zapiConfig.instanceId}` : 'Nao configurado',
+                detail: zapiOk ? `Instância: ${zapiConfig.instanceId}` : 'Não configurado',
                 docsUrl: 'https://developer.z-api.io',
-            },
-            claude: {
-                label: 'Anthropic Claude',
-                configured: !!config_1.config.anthropicApiKey,
-                detail: config_1.config.anthropicApiKey ? `Modelo: ${config_1.config.aiModel}` : 'ANTHROPIC_API_KEY nao definida',
-                docsUrl: 'https://docs.anthropic.com',
-            },
-            openai: {
-                label: 'OpenAI GPT',
-                configured: !!config_1.config.openaiApiKey,
-                detail: config_1.config.openaiApiKey ? 'API Key configurada' : 'OPENAI_API_KEY nao definida',
-                docsUrl: 'https://platform.openai.com',
-            },
-            n8n: {
-                label: 'N8N Automacao',
-                configured: false,
-                detail: 'Em breve',
-                docsUrl: 'https://n8n.io',
-            },
-            sheets: {
-                label: 'Google Sheets',
-                configured: false,
-                detail: 'Em breve',
-                docsUrl: 'https://developers.google.com/sheets',
-            },
-            calendar: {
-                label: 'Google Calendar',
-                configured: false,
-                detail: 'Em breve',
-                docsUrl: 'https://developers.google.com/calendar',
-            },
-            erp: {
-                label: 'ERP Tecle Motos',
-                configured: false,
-                detail: 'Integracao futura',
-                docsUrl: '',
-            },
-            asaas: {
-                label: 'Asaas Pagamentos',
-                configured: false,
-                detail: 'Em breve',
-                docsUrl: 'https://asaas.com/developers',
             },
         });
     }

@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
-  Settings as SettingsIcon, Bot, Zap, Save, TestTube2, Loader2,
+  Bot, Zap, Save, TestTube2, Loader2,
   CheckCircle, XCircle, ExternalLink, Plug,
 } from 'lucide-react';
 import {
@@ -14,15 +14,21 @@ import { cn } from '../lib/utils';
 type Tab = 'ai' | 'zapi' | 'integrations';
 
 const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
-  { key: 'ai',           label: 'Inteligencia Artificial', icon: Bot },
-  { key: 'zapi',         label: 'Z-API WhatsApp',          icon: Zap },
+  { key: 'ai',           label: 'Inteligencia Artificial', icon: Bot  },
+  { key: 'zapi',         label: 'Z-API WhatsApp',          icon: Zap  },
   { key: 'integrations', label: 'Integracoes',             icon: Plug },
 ];
 
 const INTEGRATION_ICONS: Record<string, string> = {
-  zapi: '📱', claude: '🧠', openai: '🤖', n8n: '⚡',
-  sheets: '📊', calendar: '📅', erp: '🏢', asaas: '💳',
+  claude: '🧠',
+  zapi:   '📱',
 };
+
+const CLAUDE_MODEL_SUGGESTIONS = [
+  'claude-haiku-4-5-20251001',
+  'claude-3-5-haiku-latest',
+  'claude-sonnet-4-6',
+];
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>('ai');
@@ -32,31 +38,74 @@ export default function Settings() {
 
   const { data: integrations, isLoading: loadingIntegrations } = useQuery({
     queryKey: ['integrations'],
-    queryFn: getIntegrations,
-    enabled: tab === 'integrations',
+    queryFn:  getIntegrations,
+    enabled:  tab === 'integrations',
   });
 
+  // ─── Formulário IA — sempre Anthropic ────────────────────────────────────────
   const [aiForm, setAiForm] = useState({
-    provider: 'openai', model: 'gpt-4o-mini', temperature: 0.7, maxTokens: 500, systemPrompt: '', storeId: '',
+    provider:     'anthropic',
+    model:        'claude-haiku-4-5-20251001',
+    temperature:  0.7,
+    maxTokens:    500,
+    systemPrompt: '',
+    storeId:      '',
   });
-  const [testMsg, setTestMsg] = useState('Ola, quero saber sobre motos');
+  const [testMsg,    setTestMsg]    = useState('Ola, quero saber sobre motos');
   const [testResult, setTestResult] = useState('');
 
-  const aiMut  = useMutation({ mutationFn: () => saveAiConfig(aiForm) });
+  // Popula o form com o que está salvo no banco (config global sem storeId)
+  useEffect(() => {
+    if (!aiConfigs.length) return;
+    const global = (aiConfigs as any[]).find((c: any) => !c.storeId) ?? aiConfigs[0];
+    if (!global) return;
+    // Garantir que o modelo salvo seja Claude; se for GPT, substituir pelo default
+    const savedModel = (global.model as string) || '';
+    const effectiveModel = savedModel.startsWith('claude-')
+      ? savedModel
+      : 'claude-haiku-4-5-20251001';
+    setAiForm(f => ({
+      ...f,
+      provider:     'anthropic',
+      model:        effectiveModel,
+      temperature:  global.temperature  ?? 0.7,
+      maxTokens:    global.maxTokens    ?? 500,
+      systemPrompt: global.systemPrompt ?? '',
+      storeId:      global.storeId      ?? '',
+    }));
+  }, [aiConfigs]);
+
+  const aiMut  = useMutation({ mutationFn: () => saveAiConfig({ ...aiForm, provider: 'anthropic' }) });
   const testMut = useMutation({
     mutationFn: () => testAI(testMsg),
     onSuccess:  (data) => setTestResult(data.reply),
   });
 
+  // ─── Formulário Z-API ─────────────────────────────────────────────────────
   const [zapiForm, setZapiForm] = useState({
     instanceId: '', token: '', clientToken: '', baseUrl: 'https://api.z-api.io', storeId: '',
   });
   const [zapiStatus, setZapiStatus] = useState<any>(null);
+
+  useEffect(() => {
+    if (!zapiConfigs.length) return;
+    const zc = (zapiConfigs as any[])[0];
+    if (!zc) return;
+    setZapiForm(f => ({
+      ...f,
+      instanceId:  zc.instanceId  ?? '',
+      token:       zc.token       ?? '',
+      clientToken: zc.clientToken ?? '',
+      baseUrl:     zc.baseUrl     ?? 'https://api.z-api.io',
+      storeId:     zc.storeId     ?? '',
+    }));
+  }, [zapiConfigs]);
+
   const zapiMut   = useMutation({ mutationFn: () => saveZapiConfig(zapiForm) });
   const statusMut = useMutation({
     mutationFn: () => getZapiStatus(),
     onSuccess:  (data) => setZapiStatus(data),
-    onError:    () => setZapiStatus({ connected: false, error: 'Nao conectado' }),
+    onError:    ()     => setZapiStatus({ connected: false, error: 'Nao conectado' }),
   });
 
   const inputCls = 'w-full bg-[#2f2f2f] text-sm px-3 py-2 rounded-lg border border-[#343434] outline-none focus:border-primary text-[#f5f5f5] placeholder-[#b3b3b3]';
@@ -66,7 +115,7 @@ export default function Settings() {
     <div className="h-full flex flex-col bg-[#212121]">
       <div className="px-6 py-4 border-b border-[#343434]">
         <h1 className="text-lg font-bold text-[#f5f5f5]">Configuracoes</h1>
-        <p className="text-xs text-[#b3b3b3]">IA, Z-API e integracoes</p>
+        <p className="text-xs text-[#b3b3b3]">IA Anthropic Claude e Z-API WhatsApp</p>
       </div>
 
       {/* Tabs */}
@@ -89,33 +138,62 @@ export default function Settings() {
       </div>
 
       <div className="flex-1 overflow-auto p-6">
-        {/* IA */}
+
+        {/* ── ABA: IA ──────────────────────────────────────────────────────── */}
         {tab === 'ai' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-2xl space-y-6">
-            <div className={cardCls}>
-              <h2 className="font-semibold text-[#f5f5f5]">Configuracao da IA</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-[#b3b3b3] block mb-1">Provider</label>
-                  <select
-                    value={aiForm.provider}
-                    onChange={e => setAiForm(f => ({ ...f, provider: e.target.value }))}
-                    className={inputCls}
-                  >
-                    <option value="openai">OpenAI (GPT)</option>
-                    <option value="anthropic">Anthropic (Claude)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-[#b3b3b3] block mb-1">Modelo</label>
-                  <input
-                    value={aiForm.model}
-                    onChange={e => setAiForm(f => ({ ...f, model: e.target.value }))}
-                    className={inputCls}
-                    placeholder="gpt-4o-mini"
-                  />
-                </div>
+
+            {/* Banner IA oficial */}
+            <div className="flex items-center gap-4 p-4 rounded-xl border border-primary/30 bg-primary/5">
+              <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center text-xl shrink-0">
+                🧠
               </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-[#f5f5f5]">IA oficial: Anthropic Claude</p>
+                <p className="text-xs text-[#b3b3b3] mt-0.5">
+                  Usada para atendimento automatico, qualificacao de leads e respostas sugeridas
+                </p>
+              </div>
+            </div>
+
+            {/* Card configuracao */}
+            <div className={cardCls}>
+              <h2 className="font-semibold text-[#f5f5f5]">Configuracao do Modelo Claude</h2>
+
+              {/* Provider: somente Anthropic — sem seletor */}
+              <div className="flex items-center gap-3 px-3 py-2 bg-[#1a1a1a] rounded-lg border border-[#343434]">
+                <span className="text-xs text-[#b3b3b3]">Provider:</span>
+                <span className="text-xs font-medium text-primary">Anthropic (Claude)</span>
+                <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30">
+                  Oficial
+                </span>
+              </div>
+
+              {/* Modelo */}
+              <div>
+                <label className="text-xs text-[#b3b3b3] block mb-1">Modelo Claude</label>
+                <input
+                  value={aiForm.model}
+                  onChange={e => setAiForm(f => ({ ...f, model: e.target.value }))}
+                  className={inputCls}
+                  placeholder="claude-haiku-4-5-20251001"
+                />
+                <p className="text-xs text-[#666] mt-1">
+                  Sugestoes:&nbsp;
+                  {CLAUDE_MODEL_SUGGESTIONS.map((m, i) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setAiForm(f => ({ ...f, model: m }))}
+                      className="text-primary hover:underline"
+                    >
+                      {m}{i < CLAUDE_MODEL_SUGGESTIONS.length - 1 ? ' · ' : ''}
+                    </button>
+                  ))}
+                </p>
+              </div>
+
+              {/* Temperatura e Max Tokens */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs text-[#b3b3b3] block mb-1">Temperatura (0–1)</label>
@@ -136,16 +214,22 @@ export default function Settings() {
                   />
                 </div>
               </div>
+
+              {/* Prompt do sistema */}
               <div>
                 <label className="text-xs text-[#b3b3b3] block mb-1">Prompt do Sistema</label>
                 <textarea
                   value={aiForm.systemPrompt}
                   onChange={e => setAiForm(f => ({ ...f, systemPrompt: e.target.value }))}
                   rows={4}
-                  placeholder="Voce e um atendente especializado em..."
+                  placeholder="Deixe vazio para usar o prompt padrao de SDR comercial..."
                   className={cn(inputCls, 'resize-none')}
                 />
+                <p className="text-xs text-[#666] mt-1">
+                  Se vazio, usa o prompt padrao da Ana (consultora comercial Tecle Motos).
+                </p>
               </div>
+
               <button
                 onClick={() => aiMut.mutate()}
                 disabled={aiMut.isPending}
@@ -157,6 +241,7 @@ export default function Settings() {
               {aiMut.isSuccess && <p className="text-sm text-green-400">Configuracao salva!</p>}
             </div>
 
+            {/* Card teste de IA */}
             <div className={cardCls}>
               <h2 className="font-semibold text-[#f5f5f5] flex items-center gap-2">
                 <TestTube2 className="w-4 h-4 text-primary" />
@@ -167,6 +252,7 @@ export default function Settings() {
                 onChange={e => setTestMsg(e.target.value)}
                 rows={2}
                 className={cn(inputCls, 'resize-none')}
+                placeholder="Digite uma mensagem de cliente para testar..."
               />
               <button
                 onClick={() => testMut.mutate()}
@@ -178,15 +264,21 @@ export default function Settings() {
               </button>
               {testResult && (
                 <div className="bg-[#343434] rounded-lg p-3">
-                  <p className="text-xs text-[#b3b3b3] mb-1">Resposta da IA:</p>
+                  <p className="text-xs text-[#b3b3b3] mb-1">Resposta da Ana (Claude):</p>
                   <p className="text-sm text-[#f5f5f5]">{testResult}</p>
                 </div>
               )}
+              {testMut.isError && (
+                <p className="text-sm text-red-400">
+                  Erro ao testar IA. Verifique se ANTHROPIC_API_KEY está configurada no .env.
+                </p>
+              )}
             </div>
+
           </motion.div>
         )}
 
-        {/* Z-API */}
+        {/* ── ABA: Z-API ───────────────────────────────────────────────────── */}
         {tab === 'zapi' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-2xl space-y-6">
             <div className={cardCls}>
@@ -272,13 +364,13 @@ export default function Settings() {
           </motion.div>
         )}
 
-        {/* Integracoes */}
+        {/* ── ABA: INTEGRACOES ─────────────────────────────────────────────── */}
         {tab === 'integrations' && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-3xl">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-2xl">
             <div className="mb-6">
               <h2 className="text-base font-semibold text-[#f5f5f5]">Status das Integracoes</h2>
               <p className="text-xs text-[#b3b3b3] mt-1">
-                Visao geral de todos os servicos conectados ao Axion Conversa
+                Servicos ativos no Axion Conversa
               </p>
             </div>
 
@@ -298,7 +390,6 @@ export default function Settings() {
                         : 'border-[#343434] bg-[#2a2a2a]'
                     )}
                   >
-                    {/* Icone */}
                     <div className={cn(
                       'w-10 h-10 rounded-lg flex items-center justify-center text-xl shrink-0',
                       info.configured ? 'bg-green-500/15' : 'bg-[#343434]'
@@ -306,7 +397,6 @@ export default function Settings() {
                       {INTEGRATION_ICONS[key] ?? '🔌'}
                     </div>
 
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-[#f5f5f5] truncate">{info.label}</p>
@@ -340,6 +430,7 @@ export default function Settings() {
             )}
           </motion.div>
         )}
+
       </div>
     </div>
   );
