@@ -14,9 +14,11 @@ model User {
   password  String
   role      String   @default("VENDEDOR")
   active    Boolean  @default(true)
+  available Boolean  @default(true) // Disponível para receber handoffs (false = ocupado/ausente)
   avatar    String?
   storeId   String?
   region    String?  // Ex: "SP - São Paulo", "DDD 11", "Campinas" — para roteamento regional
+  city      String?  // Cidade principal do vendedor para matching preciso
   store     Store?   @relation(fields: [storeId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

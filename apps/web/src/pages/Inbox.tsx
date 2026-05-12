@@ -42,6 +42,22 @@ const TIPO_LABEL: Record<string, string> = {
   reclamacao: 'Reclamação', informacao: 'Informação', outro: 'Outro',
 };
 
+// ─── Badge do agente IA ativo ─────────────────────────────────────────────────
+const AGENT_BADGE: Record<string, { label: string; cls: string; title: string }> = {
+  SDR:       { label: 'SDR',    cls: 'text-sky-400 bg-sky-500/10 border-sky-500/25',         title: 'Agente SDR — primeiro contato' },
+  QUALIFIER: { label: 'QUALIF', cls: 'text-amber-400 bg-amber-500/10 border-amber-500/25',   title: 'Qualificador — coletando dados' },
+  CONSULTANT:{ label: 'CONSUL', cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/25', title: 'Consultor Comercial — orientando' },
+};
+
+function deriveAgentBadge(conv: any) {
+  if (!conv.aiEnabled || conv.mode !== 'IA_AUTOMATICA') return null;
+  const region   = conv.lead?.region;
+  const interest = conv.lead?.interest;
+  if (!region)   return AGENT_BADGE.SDR;
+  if (!interest) return AGENT_BADGE.QUALIFIER;
+  return AGENT_BADGE.CONSULTANT;
+}
+
 // ─── Helpers de mensagem ──────────────────────────────────────────────────────
 
 function resolveSenderType(msg: any): 'CLIENT' | 'AGENT' | 'AI' | 'FLOW' | 'SYSTEM' {
@@ -513,9 +529,22 @@ export default function Inbox() {
                           )}>
                             {modeLabel[conv.mode] ?? conv.mode}
                           </span>
+                          {/* Badge do agente IA ativo */}
+                          {(() => { const ab = deriveAgentBadge(conv); return ab ? (
+                            <span className={cn('text-[10px] px-1 rounded border font-medium', ab.cls)} title={ab.title}>
+                              {ab.label}
+                            </span>
+                          ) : null; })()}
                           {conv.lead?.temperature && (
                             <span className={cn('text-[10px] px-1 rounded border', temperatureColor[conv.lead.temperature])}>
                               {conv.lead.temperature}
+                            </span>
+                          )}
+                          {/* Região detectada */}
+                          {conv.lead?.region && conv.mode === 'IA_AUTOMATICA' && (
+                            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 truncate max-w-[70px]" title={conv.lead.region}>
+                              <MapPin className="w-2.5 h-2.5 shrink-0" />
+                              {conv.lead.region.split(' - ').pop()?.split(' / ')[0]}
                             </span>
                           )}
                           {conv.assignedUser && (
@@ -557,6 +586,13 @@ export default function Inbox() {
                       <span className={cn('text-[10px] px-1.5 py-0.5 rounded border shrink-0', modeColor[selected.mode] ?? '')}>
                         {modeLabel[selected.mode] ?? selected.mode}
                       </span>
+                      {/* Badge do agente comercial ativo */}
+                      {(() => { const ab = deriveAgentBadge(selected); return ab ? (
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded border shrink-0 font-semibold flex items-center gap-1', ab.cls)} title={ab.title}>
+                          <Bot className="w-2.5 h-2.5" />
+                          {ab.label}
+                        </span>
+                      ) : null; })()}
                       {selected.lead?.temperature && (
                         <span className={cn('text-[10px] px-1.5 py-0.5 rounded border shrink-0', TEMP_COLORS[selected.lead.temperature] ?? '')}>
                           <Flame className="w-2.5 h-2.5 inline mr-0.5" />

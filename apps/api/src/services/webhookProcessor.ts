@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { classifyIntentAndTemperature, generateAiResponse, analyzeConversation, LeadContext } from './aiService';
+import { classifyIntentAndTemperature, generateAiResponse, analyzeConversation, determineAgentStage, LeadContext, AgentType } from './aiService';
 import { sendTextMessage } from './zapiService';
 import { emitNewMessage, emitConversationUpdate, emitNewConversation } from '../socket';
 import { triggerFlowsByEvent } from './flowEngine';
@@ -503,18 +503,36 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     // Contexto do lead: dados já coletados para evitar perguntas repetidas
     const freshLead = await prisma.lead.findUnique({ where: { id: lead.id } });
     const leadContext: LeadContext = {
-      name:           freshLead?.name !== normalizedPhone ? freshLead?.name : undefined,
-      region:         freshLead?.region   ?? undefined,
-      interest:       freshLead?.interest ?? undefined,
-      temperature:    freshLead?.temperature ?? undefined,
+      name:        freshLead?.name !== normalizedPhone ? freshLead?.name : undefined,
+      region:      freshLead?.region   ?? undefined,
+      interest:    freshLead?.interest ?? undefined,
+      temperature: freshLead?.temperature ?? undefined,
     };
 
-    console.log(`${L.AI_CTX} | lead ctx: ${JSON.stringify(leadContext)} | msgs: ${chatHistory.length} | conv: ${conversation.id}`);
+    // Determinar agente comercial ativo com base no perfil do lead e qtde de mensagens
+    const inboundCount  = recentMessages.filter(m => m.direction === 'INBOUND').length;
+    const agentType: AgentType = determineAgentStage(
+      { region: freshLead?.region, interest: freshLead?.interest, temperature: freshLead?.temperature ?? 'FRIO' },
+      inboundCount,
+    );
+
+    console.log(`${L.AI_CTX} | agente: ${agentType} | inbound: ${inboundCount} | region: ${freshLead?.region ?? 'n/a'} | interest: ${freshLead?.interest ?? 'n/a'} | conv: ${conversation.id}`);
     await prisma.automationLog.create({
       data: {
         type:           'IA_CONTEXT_BUILT',
-        description:    `Contexto montado: ${chatHistory.length} mensagens | lead conhecido: ${!!leadContext.region}`,
-        data:           JSON.stringify({ leadContext, messageCount: chatHistory.length }),
+        description:    `Agente: ${agentType} | ${chatHistory.length} msgs | region: ${freshLead?.region ?? 'não coletada'}`,
+        data:           JSON.stringify({ agentType, leadContext, messageCount: chatHistory.length, inboundCount }),
+        conversationId: conversation.id,
+        leadId:         lead.id,
+      },
+    }).catch(() => {});
+
+    // Logar mudança de agente para o frontend mostrar
+    await prisma.automationLog.create({
+      data: {
+        type:           'IA_AGENT_STAGE',
+        description:    `Agente comercial ativo: ${agentType}`,
+        data:           JSON.stringify({ agentType, inboundCount, region: freshLead?.region, interest: freshLead?.interest }),
         conversationId: conversation.id,
         leadId:         lead.id,
       },
@@ -522,7 +540,7 @@ export async function processZapiWebhook(payload: any): Promise<void> {
 
     let aiReply: string;
     try {
-      aiReply = await generateAiResponse(conversation.id, chatHistory, conversation.storeId, leadContext);
+      aiReply = await generateAiResponse(conversation.id, chatHistory, conversation.storeId, leadContext, agentType);
     } catch (aiErr: any) {
       console.error(`${L.AI_ERR} | ${aiErr.message} | conv: ${conversation.id}`);
       await prisma.automationLog.create({
@@ -593,8 +611,7 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     });
 
     // ── PASSO 18 — Extração assíncrona de dados do lead em background ─────────
-    // A cada 4 mensagens inbound ou quando a conversa é nova, extrai cidade/interesse/pagamento
-    const inboundCount = recentMessages.filter(m => m.direction === 'INBOUND').length;
+    // inboundCount já calculado no PASSO 14. A cada 4 msgs ou nas primeiras 2, extrai dados.
     if (inboundCount > 0 && (inboundCount <= 2 || inboundCount % 4 === 0)) {
       extractAndSaveLeadData(conversation.id, conversation.storeId, lead.id, recentMessages)
         .catch((e: any) => console.error('[LEAD_EXTRACT_BG] Erro:', e.message));

@@ -9,7 +9,7 @@ import {
 const prisma = new PrismaClient();
 
 // Minutos antes de uma notificação expirar e escalar para o próximo vendedor
-const TIMEOUT_MINUTES = 5;
+const TIMEOUT_MINUTES = 1;
 
 // Mensagem enviada pelo número central ao cliente durante o handoff
 export const HANDOFF_MSG =
@@ -19,38 +19,169 @@ export const HANDOFF_MSG =
 
 // ─── Extração de região do texto ─────────────────────────────────────────────
 
+// Mapa de cidade/bairro → região normalizada para roteamento
 const REGION_KEYWORDS: [string, string][] = [
-  // [regex/keyword, valor normalizado]
-  ['são paulo',     'SP - São Paulo'],
-  ['sorocaba',      'SP - Sorocaba'],
-  ['campinas',      'SP - Campinas'],
-  ['santo andré',   'SP - Santo André'],
-  ['santos',        'SP - Santos'],
-  ['ribeirão preto','SP - Ribeirão Preto'],
-  ['rio de janeiro','RJ - Rio de Janeiro'],
-  ['belo horizonte','MG - Belo Horizonte'],
-  ['curitiba',      'PR - Curitiba'],
-  ['florianópolis', 'SC - Florianópolis'],
-  ['porto alegre',  'RS - Porto Alegre'],
-  ['salvador',      'BA - Salvador'],
-  ['recife',        'PE - Recife'],
-  ['fortaleza',     'CE - Fortaleza'],
-  ['manaus',        'AM - Manaus'],
-  ['goiânia',       'GO - Goiânia'],
-  ['brasília',      'DF - Brasília'],
+  // São Paulo (capital + bairros)
+  ['são paulo',      'SP - São Paulo'],
+  ['zona sul',       'SP - São Paulo / Zona Sul'],
+  ['zona norte',     'SP - São Paulo / Zona Norte'],
+  ['zona leste',     'SP - São Paulo / Zona Leste'],
+  ['zona oeste',     'SP - São Paulo / Zona Oeste'],
+  ['centro de sp',   'SP - São Paulo / Centro'],
+  ['abc paulista',   'SP - ABC Paulista'],
+  ['santo andré',    'SP - ABC / Santo André'],
+  ['são bernardo',   'SP - ABC / São Bernardo'],
+  ['são caetano',    'SP - ABC / São Caetano'],
+  ['guarulhos',      'SP - Guarulhos'],
+  ['osasco',         'SP - Osasco'],
+  ['campinas',       'SP - Campinas'],
+  ['sorocaba',       'SP - Sorocaba'],
+  ['ribeirão preto', 'SP - Ribeirão Preto'],
+  ['santos',         'SP - Santos / Baixada Santista'],
+  ['são vicente',    'SP - Santos / Baixada Santista'],
+  ['praia grande',   'SP - Santos / Baixada Santista'],
+  ['bauru',          'SP - Bauru'],
+  ['marília',        'SP - Marília'],
+  ['presidente prudente', 'SP - Presidente Prudente'],
+  ['são josé dos campos', 'SP - São José dos Campos'],
+  ['jundiaí',        'SP - Jundiaí'],
+  ['piracicaba',     'SP - Piracicaba'],
+  // Rio de Janeiro
+  ['rio de janeiro', 'RJ - Rio de Janeiro'],
+  ['niterói',        'RJ - Niterói'],
+  ['nova iguaçu',    'RJ - Baixada Fluminense'],
+  ['duque de caxias','RJ - Baixada Fluminense'],
+  ['petrópolis',     'RJ - Petrópolis'],
+  // Minas Gerais
+  ['belo horizonte', 'MG - Belo Horizonte'],
+  ['uberlândia',     'MG - Uberlândia'],
+  ['contagem',       'MG - Grande BH'],
+  ['juiz de fora',   'MG - Juiz de Fora'],
+  // Sul
+  ['curitiba',       'PR - Curitiba'],
+  ['londrina',       'PR - Londrina'],
+  ['maringá',        'PR - Maringá'],
+  ['florianópolis',  'SC - Florianópolis'],
+  ['joinville',      'SC - Joinville'],
+  ['blumenau',       'SC - Blumenau'],
+  ['porto alegre',   'RS - Porto Alegre'],
+  ['caxias do sul',  'RS - Caxias do Sul'],
+  // Nordeste
+  ['salvador',       'BA - Salvador'],
+  ['feira de santana','BA - Feira de Santana'],
+  ['recife',         'PE - Recife'],
+  ['caruaru',        'PE - Caruaru'],
+  ['fortaleza',      'CE - Fortaleza'],
+  ['natal',          'RN - Natal'],
+  ['joão pessoa',    'PB - João Pessoa'],
+  ['maceió',         'AL - Maceió'],
+  ['aracaju',        'SE - Aracaju'],
+  ['são luís',       'MA - São Luís'],
+  ['teresina',       'PI - Teresina'],
+  // Centro-Oeste / Norte
+  ['brasília',       'DF - Brasília'],
+  ['goiânia',        'GO - Goiânia'],
+  ['anápolis',       'GO - Anápolis'],
+  ['campo grande',   'MS - Campo Grande'],
+  ['cuiabá',         'MT - Cuiabá'],
+  ['manaus',         'AM - Manaus'],
+  ['belém',          'PA - Belém'],
+  ['porto velho',    'RO - Porto Velho'],
 ];
+
+// DDD → estado/região para fallback quando cidade não é detectada
+const DDD_REGION: Record<string, string> = {
+  '11': 'SP - São Paulo (capital)',
+  '12': 'SP - São José dos Campos',
+  '13': 'SP - Santos / Baixada Santista',
+  '14': 'SP - Bauru',
+  '15': 'SP - Sorocaba',
+  '16': 'SP - Ribeirão Preto',
+  '17': 'SP - São José do Rio Preto',
+  '18': 'SP - Presidente Prudente',
+  '19': 'SP - Campinas',
+  '21': 'RJ - Rio de Janeiro',
+  '22': 'RJ - Campos dos Goytacazes',
+  '24': 'RJ - Volta Redonda',
+  '27': 'ES - Vitória',
+  '28': 'ES - Cachoeiro de Itapemirim',
+  '31': 'MG - Belo Horizonte',
+  '32': 'MG - Juiz de Fora',
+  '33': 'MG - Governador Valadares',
+  '34': 'MG - Uberlândia',
+  '35': 'MG - Poços de Caldas',
+  '37': 'MG - Divinópolis',
+  '38': 'MG - Montes Claros',
+  '41': 'PR - Curitiba',
+  '42': 'PR - Ponta Grossa',
+  '43': 'PR - Londrina',
+  '44': 'PR - Maringá',
+  '45': 'PR - Cascavel',
+  '46': 'PR - Francisco Beltrão',
+  '47': 'SC - Joinville',
+  '48': 'SC - Florianópolis',
+  '49': 'SC - Chapecó',
+  '51': 'RS - Porto Alegre',
+  '53': 'RS - Pelotas',
+  '54': 'RS - Caxias do Sul',
+  '55': 'RS - Santa Maria',
+  '61': 'DF - Brasília',
+  '62': 'GO - Goiânia',
+  '63': 'TO - Palmas',
+  '64': 'GO - Rio Verde',
+  '65': 'MT - Cuiabá',
+  '66': 'MT - Rondonópolis',
+  '67': 'MS - Campo Grande',
+  '68': 'AC - Rio Branco',
+  '69': 'RO - Porto Velho',
+  '71': 'BA - Salvador',
+  '73': 'BA - Ilhéus',
+  '74': 'BA - Juazeiro',
+  '75': 'BA - Feira de Santana',
+  '77': 'BA - Vitória da Conquista',
+  '79': 'SE - Aracaju',
+  '81': 'PE - Recife',
+  '82': 'AL - Maceió',
+  '83': 'PB - João Pessoa',
+  '84': 'RN - Natal',
+  '85': 'CE - Fortaleza',
+  '86': 'PI - Teresina',
+  '87': 'PE - Petrolina',
+  '88': 'CE - Juazeiro do Norte',
+  '89': 'PI - Picos',
+  '91': 'PA - Belém',
+  '92': 'AM - Manaus',
+  '93': 'PA - Santarém',
+  '94': 'PA - Marabá',
+  '95': 'RR - Boa Vista',
+  '96': 'AP - Macapá',
+  '97': 'AM - Coari',
+  '98': 'MA - São Luís',
+  '99': 'MA - Imperatriz',
+};
 
 export function extractRegion(text: string): string | null {
   const lower = text.toLowerCase();
 
-  // Cidades/regiões por nome
+  // 1. Cidades/bairros/regiões por nome (tabela expandida)
   for (const [kw, norm] of REGION_KEYWORDS) {
     if (lower.includes(kw)) return norm;
   }
 
-  // DDD (11-99)
-  const ddd = text.match(/\b(1[1-9]|2[1-9]|3[1-4]|3[7-8]|4[1-9]|5[1-5]|6[1-9]|7[1-9]|8[1-9]|9[1-9])\b/);
-  if (ddd) return `DDD ${ddd[1]}`;
+  // 2. DDD com parênteses (ex: "(11)", "(021)") — formato mais comum em texto
+  const dddParen = text.match(/\(0?(\d{2})\)/);
+  if (dddParen) {
+    const ddd = dddParen[1];
+    if (DDD_REGION[ddd]) return DDD_REGION[ddd];
+  }
+
+  // 3. DDD como palavra isolada (ex: "DDD 11", "sou do 11")
+  const dddWord = text.match(/\b(1[1-9]|2[1-9]|3[1-4]|3[7-8]|4[1-9]|5[1-5]|6[1-9]|7[1-9]|8[1-9]|9[1-9])\b/);
+  if (dddWord) {
+    const ddd = dddWord[1];
+    if (DDD_REGION[ddd]) return DDD_REGION[ddd];
+    return `DDD ${ddd}`;
+  }
 
   return null;
 }
@@ -63,32 +194,61 @@ export async function findBestSeller(
   excludeIds: string[] = [],
 ): Promise<{ id: string; name: string } | null> {
   const base: any = {
-    active: true,
-    role:   { in: ['VENDEDOR', 'ATENDENTE', 'GERENTE'] },
-    id:     { notIn: excludeIds.length ? excludeIds : ['__none__'] },
+    active:    true,
+    available: true,                    // ignora vendedores offline/indisponíveis
+    role:      { in: ['VENDEDOR', 'ATENDENTE', 'GERENTE'] },
+    id:        { notIn: excludeIds.length ? excludeIds : ['__none__'] },
   };
   if (storeId) base.storeId = storeId;
 
   const sellers = await prisma.user.findMany({
     where:   base,
-    select:  { id: true, name: true, region: true },
+    select:  { id: true, name: true, region: true, city: true },
     orderBy: { createdAt: 'asc' },
   });
 
-  // Tentativa 1: correspondência de região
+  if (!sellers.length) return null;
+
   if (region) {
     const rLow = region.toLowerCase();
-    const match = sellers.find(s =>
-      s.region && (
-        s.region.toLowerCase().includes(rLow) ||
-        rLow.includes(s.region.toLowerCase())
-      )
-    );
-    if (match) return { id: match.id, name: match.name };
+
+    // Tentativa 1: match exato na cidade do vendedor
+    const cityMatch = sellers.find(s => {
+      const c = s.city ?? '';
+      return c.length > 0 && rLow.includes(c.toLowerCase());
+    });
+    if (cityMatch) {
+      console.log(`[ROUTING] Match por cidade: ${cityMatch.name} (city: ${cityMatch.city})`);
+      return { id: cityMatch.id, name: cityMatch.name };
+    }
+
+    // Tentativa 2: match na região (texto parcial bidirecional)
+    const regionMatch = sellers.find(s => {
+      const r = s.region ?? '';
+      if (!r) return false;
+      const sr = r.toLowerCase();
+      return sr.includes(rLow) || rLow.includes(sr);
+    });
+    if (regionMatch) {
+      console.log(`[ROUTING] Match por região: ${regionMatch.name} (region: ${regionMatch.region})`);
+      return { id: regionMatch.id, name: regionMatch.name };
+    }
+
+    // Tentativa 3: match por estado (primeiros 2 chars: "SP", "RJ", etc.)
+    const statePrefix = rLow.substring(0, 2);
+    const stateMatch = sellers.find(s => {
+      const r = s.region ?? '';
+      return r.length > 0 && r.toLowerCase().startsWith(statePrefix);
+    });
+    if (stateMatch) {
+      console.log(`[ROUTING] Match por estado: ${stateMatch.name} (prefix: ${statePrefix})`);
+      return { id: stateMatch.id, name: stateMatch.name };
+    }
   }
 
-  // Tentativa 2: qualquer vendedor da loja / disponível
-  return sellers.length ? { id: sellers[0].id, name: sellers[0].name } : null;
+  // Fallback: primeiro vendedor disponível da loja / sistema
+  console.log(`[ROUTING] Sem match regional — usando primeiro disponível: ${sellers[0].name}`);
+  return { id: sellers[0].id, name: sellers[0].name };
 }
 
 // ─── Cria notificação para vendedor + emite socket ────────────────────────────
