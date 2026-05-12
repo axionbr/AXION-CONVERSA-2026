@@ -1,5 +1,39 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.CONVERSATIONAL_EVENTS = void 0;
 exports.triggerFlowsByEvent = triggerFlowsByEvent;
 exports.executeFlow = executeFlow;
 const client_1 = require("@prisma/client");
@@ -7,35 +41,48 @@ const aiService_1 = require("./aiService");
 const zapiService_1 = require("./zapiService");
 const socket_1 = require("../socket");
 const prisma = new client_1.PrismaClient();
+// ─── Eventos conversacionais: se um fluxo desses rodar, IA não faz fallback ──
+exports.CONVERSATIONAL_EVENTS = new Set([
+    'MESSAGE_RECEIVED',
+    'KEYWORD',
+    'FIRST_MESSAGE',
+]);
+/**
+ * Dispara fluxos cadastrados para o evento dado.
+ * Retorna `true` se ao menos um fluxo foi efetivamente executado.
+ * Usado pelo webhookProcessor para decidir se a IA deve fazer fallback.
+ */
 async function triggerFlowsByEvent(eventType, value, conversationId, leadId) {
     const triggers = await prisma.flowTrigger.findMany({
         where: { type: eventType, active: true },
         include: { flow: { include: { nodes: true, edges: true } } },
     });
     if (triggers.length === 0)
-        return;
+        return false;
+    let anyExecuted = false;
     for (const trigger of triggers) {
         if (!trigger.flow.active)
             continue;
         if (eventType === 'KEYWORD' && trigger.value) {
-            const keyword = trigger.value.toLowerCase();
-            if (!value.toLowerCase().includes(keyword))
+            if (!value.toLowerCase().includes(trigger.value.toLowerCase()))
                 continue;
         }
         try {
             await executeFlow(trigger.flow.id, conversationId, leadId);
+            anyExecuted = true;
             await prisma.automationLog.create({
                 data: {
-                    type: 'FLOW_EVENT_TRIGGERED',
-                    description: `Fluxo "${trigger.flow.name}" disparado por evento ${eventType}`,
+                    type: 'FLOW_EXECUTED',
+                    description: `Fluxo "${trigger.flow.name}" executado | evento: ${eventType}`,
                     data: JSON.stringify({ eventType, value: value.substring(0, 100), flowId: trigger.flow.id }),
                     conversationId,
                     leadId,
                 },
             }).catch(() => { });
+            console.log(`[FLOW_EXECUTED] | fluxo: "${trigger.flow.name}" | evento: ${eventType} | conv: ${conversationId}`);
         }
         catch (flowErr) {
-            console.error(`[FLOW_EVENT_FAILED] | evento: ${eventType} | fluxo: ${trigger.flow.id} | erro:`, flowErr.message);
+            console.error(`[FLOW_EVENT_FAILED] | evento: ${eventType} | fluxo: ${trigger.flow.id} |`, flowErr.message);
             await prisma.automationLog.create({
                 data: {
                     type: 'FLOW_EVENT_FAILED',
@@ -47,6 +94,7 @@ async function triggerFlowsByEvent(eventType, value, conversationId, leadId) {
             }).catch(() => { });
         }
     }
+    return anyExecuted;
 }
 async function executeFlow(flowId, conversationId, leadId) {
     const flow = await prisma.flow.findUnique({
@@ -59,13 +107,7 @@ async function executeFlow(flowId, conversationId, leadId) {
     if (!startNode)
         return;
     const execution = await prisma.flowExecution.create({
-        data: {
-            flowId,
-            conversationId,
-            leadId,
-            status: 'RUNNING',
-            currentNodeId: startNode.id,
-        },
+        data: { flowId, conversationId, leadId, status: 'RUNNING', currentNodeId: startNode.id },
     });
     try {
         await executeNode(execution.id, startNode.id, flow, conversationId, leadId);
@@ -81,6 +123,56 @@ async function executeFlow(flowId, conversationId, leadId) {
         });
     }
 }
+// ─── Helper: chama um agente IA dentro do fluxo ───────────────────────────────
+async function runAgentNode(agentType, conversationId, nodeId, leadId) {
+    const recentMessages = await prisma.message.findMany({
+        where: { conversationId },
+        orderBy: { createdAt: 'asc' },
+        take: 15,
+    });
+    const chatHistory = recentMessages.map((m) => ({
+        role: (m.direction === 'INBOUND' ? 'user' : 'assistant'),
+        content: m.content,
+    }));
+    const conversation = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        include: { contact: true },
+    });
+    const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId } }) : null;
+    const leadContext = {
+        region: lead?.region ?? undefined,
+        interest: lead?.interest ?? undefined,
+        temperature: lead?.temperature ?? undefined,
+    };
+    const aiReply = await (0, aiService_1.generateAiResponse)(conversationId, chatHistory, conversation?.storeId, leadContext, agentType);
+    if (aiReply && conversation) {
+        const msg = await prisma.message.create({
+            data: {
+                conversationId,
+                direction: 'OUTBOUND',
+                type: 'TEXT',
+                content: aiReply,
+                senderType: 'AI',
+                fromFlow: true,
+                flowNodeId: nodeId,
+            },
+        });
+        const zapiPhone = `55${conversation.contact.phone}`;
+        await (0, zapiService_1.sendTextMessage)(zapiPhone, aiReply, conversation.storeId).catch((e) => console.error(`[FLOW_AGENT] Z-API error (${agentType}):`, e.message));
+        (0, socket_1.emitNewMessage)(conversationId, {
+            id: msg.id,
+            conversationId,
+            direction: 'OUTBOUND',
+            type: 'TEXT',
+            content: aiReply,
+            senderType: 'AI',
+            createdAt: msg.createdAt.toISOString(),
+            fromFlow: true,
+        });
+    }
+    return aiReply;
+}
+// ─── Executor de nó ───────────────────────────────────────────────────────────
 async function executeNode(executionId, nodeId, flow, conversationId, leadId, depth = 0) {
     if (depth > 50)
         throw new Error('Flow loop detected');
@@ -91,8 +183,9 @@ async function executeNode(executionId, nodeId, flow, conversationId, leadId, de
         where: { id: executionId },
         data: { currentNodeId: nodeId },
     });
-    const stepData = { executionId, nodeId, status: 'running', input: '{}' };
-    const step = await prisma.flowExecutionStep.create({ data: stepData });
+    const step = await prisma.flowExecutionStep.create({
+        data: { executionId, nodeId, status: 'running', input: '{}' },
+    });
     let nextNodeId = null;
     let output = {};
     try {
@@ -121,65 +214,66 @@ async function executeNode(executionId, nodeId, flow, conversationId, leadId, de
                             flowNodeId: nodeId,
                         },
                     });
-                    // contact.phone é normalizado (sem DDI); Z-API precisa do "55" prefixado
                     const zapiPhone = `55${conversation.contact.phone}`;
-                    await (0, zapiService_1.sendTextMessage)(zapiPhone, config.text, conversation.storeId).catch((e) => console.error('Flow Z-API error:', e.message));
+                    await (0, zapiService_1.sendTextMessage)(zapiPhone, config.text, conversation.storeId).catch((e) => console.error('Flow MESSAGE Z-API error:', e.message));
                     (0, socket_1.emitNewMessage)(conversationId, {
-                        id: msg.id,
-                        conversationId,
-                        direction: 'OUTBOUND',
-                        type: 'TEXT',
-                        content: config.text,
-                        createdAt: msg.createdAt.toISOString(),
-                        fromFlow: true,
+                        id: msg.id, conversationId, direction: 'OUTBOUND', type: 'TEXT',
+                        content: config.text, createdAt: msg.createdAt.toISOString(), fromFlow: true,
                     });
                 }
                 nextNodeId = getNextNode(flow.edges, nodeId);
                 output = { sent: config.text };
                 break;
             }
+            // ── Resposta IA genérica (sem agente específico) ─────────────────────────
             case 'AI_RESPONSE': {
-                const recentMessages = await prisma.message.findMany({
-                    where: { conversationId },
-                    orderBy: { createdAt: 'asc' },
-                    take: 15,
-                });
-                const chatHistory = recentMessages.map((m) => ({
-                    role: (m.direction === 'INBOUND' ? 'user' : 'assistant'),
-                    content: m.content,
+                const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId } }) : null;
+                const inboundCount = (await prisma.message.count({
+                    where: { conversationId, direction: 'INBOUND' },
                 }));
-                const conversation = await prisma.conversation.findUnique({
+                const agentType = (0, aiService_1.determineAgentStage)({ region: lead?.region, interest: lead?.interest, temperature: lead?.temperature ?? 'FRIO' }, inboundCount);
+                const aiReply = await runAgentNode(agentType, conversationId, nodeId, leadId);
+                nextNodeId = getNextNode(flow.edges, nodeId);
+                output = { agentType, aiReply };
+                break;
+            }
+            // ── Agentes comerciais específicos ───────────────────────────────────────
+            case 'AGENT_SDR': {
+                const aiReply = await runAgentNode('SDR', conversationId, nodeId, leadId);
+                nextNodeId = getNextNode(flow.edges, nodeId);
+                output = { agentType: 'SDR', aiReply };
+                break;
+            }
+            case 'AGENT_QUALIFIER': {
+                const aiReply = await runAgentNode('QUALIFIER', conversationId, nodeId, leadId);
+                nextNodeId = getNextNode(flow.edges, nodeId);
+                output = { agentType: 'QUALIFIER', aiReply };
+                break;
+            }
+            case 'AGENT_CONSULTANT': {
+                const aiReply = await runAgentNode('CONSULTANT', conversationId, nodeId, leadId);
+                nextNodeId = getNextNode(flow.edges, nodeId);
+                output = { agentType: 'CONSULTANT', aiReply };
+                break;
+            }
+            case 'AGENT_HANDOFF': {
+                // Ativa o handoff comercial para o lead atual
+                const conv = await prisma.conversation.findUnique({
                     where: { id: conversationId },
-                    include: { contact: true },
+                    include: { lead: true },
                 });
-                const aiReply = await (0, aiService_1.generateAiResponse)(conversationId, chatHistory, conversation?.storeId);
-                if (aiReply && conversation) {
-                    const msg = await prisma.message.create({
-                        data: {
-                            conversationId,
-                            direction: 'OUTBOUND',
-                            type: 'TEXT',
-                            content: aiReply,
-                            senderType: 'AI',
-                            fromFlow: true,
-                            flowNodeId: nodeId,
-                        },
+                if (conv?.lead) {
+                    const { initiateHandoff } = await Promise.resolve().then(() => __importStar(require('./handoffService')));
+                    await initiateHandoff(conversationId, {
+                        id: conv.lead.id,
+                        phone: conv.lead.phone,
+                        temperature: conv.lead.temperature,
+                        storeId: conv.storeId,
+                        region: conv.lead.region,
                     });
-                    // contact.phone é normalizado (sem DDI); Z-API precisa do "55" prefixado
-                    const zapiPhone = `55${conversation.contact.phone}`;
-                    await (0, zapiService_1.sendTextMessage)(zapiPhone, aiReply, conversation.storeId).catch((e) => console.error('Flow Z-API error:', e.message));
-                    (0, socket_1.emitNewMessage)(conversationId, {
-                        id: msg.id,
-                        conversationId,
-                        direction: 'OUTBOUND',
-                        type: 'TEXT',
-                        content: aiReply,
-                        createdAt: msg.createdAt.toISOString(),
-                        fromFlow: true,
-                    });
+                    output = { handoffInitiated: true, leadId: conv.lead.id };
                 }
                 nextNodeId = getNextNode(flow.edges, nodeId);
-                output = { aiReply };
                 break;
             }
             case 'SET_TAG': {
@@ -199,9 +293,8 @@ async function executeNode(executionId, nodeId, flow, conversationId, leadId, de
             case 'REMOVE_TAG': {
                 if (leadId && config.tagName) {
                     const tag = await prisma.tag.findFirst({ where: { name: config.tagName } });
-                    if (tag) {
+                    if (tag)
                         await prisma.leadTag.deleteMany({ where: { leadId, tagId: tag.id } });
-                    }
                 }
                 nextNodeId = getNextNode(flow.edges, nodeId);
                 break;
@@ -278,7 +371,6 @@ async function executeNode(executionId, nodeId, flow, conversationId, leadId, de
                 break;
             }
             case 'DELAY': {
-                // V1: log delay, skip actual waiting
                 output = { delay: config.delay, unit: config.unit };
                 nextNodeId = getNextNode(flow.edges, nodeId);
                 break;

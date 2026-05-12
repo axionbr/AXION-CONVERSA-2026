@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.determineAgentStage = determineAgentStage;
 exports.generateAiResponse = generateAiResponse;
 exports.analyzeConversation = analyzeConversation;
 exports.classifyIntentAndTemperature = classifyIntentAndTemperature;
@@ -13,6 +14,49 @@ const client_1 = require("@prisma/client");
 const prisma = new client_1.PrismaClient();
 const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+/**
+ * Determina qual agente deve atender com base no estado do lead e histórico.
+ *
+ * SDR        → primeiros 2 contatos: recepcionar, entender intenção básica
+ * QUALIFIER  → 3+ mensagens, ainda falta cidade/região ou interesse
+ * CONSULTANT → perfil completo (região + interesse), orientar e preparar handoff
+ */
+function determineAgentStage(lead, inboundCount) {
+    if (inboundCount <= 2)
+        return 'SDR';
+    if (!lead.region || !lead.interest)
+        return 'QUALIFIER';
+    return 'CONSULTANT';
+}
+// ─── Instruções adicionais por agente (injetadas no prompt base) ─────────────
+const AGENT_INSTRUCTIONS = {
+    SDR: `
+
+━━━ AGENTE ATIVO: SDR — PRIMEIRO CONTATO ━━━
+Este é o PRIMEIRO contato com o cliente.
+Sua ÚNICA missão agora: cumprimentar profissionalmente e perguntar o USO PRETENDIDO.
+Não pergunte nome, cidade ou modelo ainda.
+Faça exatamente 1 pergunta sobre: dia a dia, trabalho, lazer ou maior autonomia.
+
+EXEMPLO DE RESPOSTA:
+"Boa tarde! Pode perguntar, te ajudo. Você está procurando uma scooter elétrica para o dia a dia, para trabalho ou mais para lazer?"`,
+    QUALIFIER: `
+
+━━━ AGENTE ATIVO: QUALIFICADOR — COLETANDO DADOS ━━━
+Você já fez o primeiro contato. Agora colete a próxima informação que falta.
+Prioridade: 1) cidade/região → 2) modelo/tipo de interesse.
+Se já tiver a cidade, pergunte sobre o interesse.
+Se já tiver o interesse, pergunte sobre a cidade.
+Apenas 1 pergunta. Continue natural, sem parecer formulário.`,
+    CONSULTANT: `
+
+━━━ AGENTE ATIVO: CONSULTOR COMERCIAL — ORIENTANDO ━━━
+Você já conhece o perfil deste cliente (região e interesse coletados).
+Agora oriente com linguagem consultiva sobre as melhores opções de mobilidade elétrica
+para o uso e região declarados.
+Se perguntarem preço ou condições, diga que vai direcionar para o especialista com valores atualizados.
+Se demonstrarem intenção real de compra, prepare para a transferência ao especialista.`,
+};
 // ─── Prompt comercial — Pré-vendedor consultivo Tecle Motos ─────────────────
 const DEFAULT_SYSTEM_PROMPT = `Você é a Ana, consultora de mobilidade elétrica da Tecle Motos.
 Trabalha com scooters elétricas, motos elétricas e soluções de mobilidade urbana.
@@ -110,7 +154,7 @@ async function loadAiConfig(storeId) {
     const global = await prisma.aiConfig.findFirst({ where: { storeId: null } });
     return global ?? null;
 }
-async function generateAiResponse(conversationId, messages, storeId, leadContext) {
+async function generateAiResponse(conversationId, messages, storeId, leadContext, agentType) {
     let provider = config_1.config.aiProvider;
     let model = config_1.config.aiModel;
     let systemPrompt = DEFAULT_SYSTEM_PROMPT;
@@ -127,7 +171,6 @@ async function generateAiResponse(conversationId, messages, storeId, leadContext
         maxTokens = dbConfig.maxTokens;
     }
     // ── REGRA ABSOLUTA: se ANTHROPIC_API_KEY estiver configurada, SEMPRE usar Anthropic ──
-    // Ignora qualquer valor de provider que possa estar salvo no banco (ex: 'openai' antigo).
     if (config_1.config.anthropicApiKey) {
         provider = 'anthropic';
         if (!model || !isClaudeModel(model)) {
@@ -135,7 +178,7 @@ async function generateAiResponse(conversationId, messages, storeId, leadContext
             model = DEFAULT_CLAUDE_MODEL;
         }
     }
-    // Injetar contexto do lead no prompt para evitar perguntas repetidas
+    // Injetar contexto do lead (dados já coletados — evita perguntas repetidas)
     if (leadContext) {
         const parts = [];
         if (leadContext.name)
@@ -149,11 +192,15 @@ async function generateAiResponse(conversationId, messages, storeId, leadContext
         if (leadContext.temperature)
             parts.push(`- Temperatura do lead: ${leadContext.temperature}`);
         if (parts.length > 0) {
-            systemPrompt += `\n\nCONTEXTO DO LEAD (dados já coletados — NÃO PERGUNTE DE NOVO):\n${parts.join('\n')}\n\nAvance para a próxima informação da qualificação que ainda não foi coletada.`;
+            systemPrompt += `\n\nCONTEXTO DO LEAD (dados já coletados — NÃO PERGUNTE DE NOVO):\n${parts.join('\n')}`;
         }
     }
+    // Injetar instruções do agente ativo (SDR / QUALIFIER / CONSULTANT)
+    if (agentType && AGENT_INSTRUCTIONS[agentType]) {
+        systemPrompt += AGENT_INSTRUCTIONS[agentType];
+    }
     if (provider === 'anthropic') {
-        console.log(`[IA] Chamando Anthropic | modelo: ${model} | conversa: ${conversationId}`);
+        console.log(`[IA] Chamando Anthropic | agente: ${agentType ?? 'default'} | modelo: ${model} | conversa: ${conversationId}`);
         const client = new sdk_1.default({ apiKey: config_1.config.anthropicApiKey });
         const response = await client.messages.create({
             model,

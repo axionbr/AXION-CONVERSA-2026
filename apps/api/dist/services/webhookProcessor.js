@@ -342,22 +342,71 @@ async function processZapiWebhook(payload) {
                 leadId: lead.id,
             },
         });
-        // ── PASSO 12 — Gatilhos de fluxo ──────────────────────────────────────────
-        (0, flowEngine_1.triggerFlowsByEvent)('KEYWORD', content, conversation.id, lead.id)
-            .catch((e) => console.error(`${L.FLOW} | KEYWORD error:`, e.message));
-        // Evento MESSAGE_RECEIVED para todos os fluxos que escutam mensagens
-        (0, flowEngine_1.triggerFlowsByEvent)('MESSAGE_RECEIVED', content, conversation.id, lead.id)
-            .catch((e) => console.error(`${L.FLOW} | MESSAGE_RECEIVED error:`, e.message));
+        // ── PASSO 12 — VERIFICAÇÃO DE PRIORIDADE DE FLUXO ────────────────────────
+        // Regra: se existe fluxo ativo que responde a esta mensagem, ELE tem prioridade.
+        // A IA autônoma só age como fallback quando nenhum fluxo conversacional está ativo.
+        console.log(`[FLOW_PRIORITY_CHECK] | conv: ${conversation.id} | lead: ${lead.id}`);
+        await prisma.automationLog.create({
+            data: {
+                type: 'FLOW_PRIORITY_CHECK',
+                description: `Verificando fluxos ativos para mensagem recebida`,
+                conversationId: conversation.id,
+                leadId: lead.id,
+            },
+        }).catch(() => { });
+        let conversationalFlowExecuted = false;
+        // — Eventos conversacionais: aguardados, resultado decide se IA roda ———————
+        const mrExec = await (0, flowEngine_1.triggerFlowsByEvent)('MESSAGE_RECEIVED', content, conversation.id, lead.id)
+            .catch((e) => { console.error(`[FLOW] MESSAGE_RECEIVED error:`, e.message); return false; });
+        if (mrExec) {
+            conversationalFlowExecuted = true;
+            console.log(`[FLOW_MATCHED] | MESSAGE_RECEIVED | conv: ${conversation.id}`);
+        }
+        const kwExec = await (0, flowEngine_1.triggerFlowsByEvent)('KEYWORD', content, conversation.id, lead.id)
+            .catch((e) => { console.error(`[FLOW] KEYWORD error:`, e.message); return false; });
+        if (kwExec) {
+            conversationalFlowExecuted = true;
+            console.log(`[FLOW_MATCHED] | KEYWORD | conv: ${conversation.id}`);
+        }
         if (isNewLead) {
-            (0, flowEngine_1.triggerFlowsByEvent)('FIRST_MESSAGE', content, conversation.id, lead.id)
-                .catch((e) => console.error(`${L.FLOW} | FIRST_MESSAGE error:`, e.message));
+            const fmExec = await (0, flowEngine_1.triggerFlowsByEvent)('FIRST_MESSAGE', content, conversation.id, lead.id)
+                .catch((e) => { console.error(`[FLOW] FIRST_MESSAGE error:`, e.message); return false; });
+            if (fmExec) {
+                conversationalFlowExecuted = true;
+                console.log(`[FLOW_MATCHED] | FIRST_MESSAGE | conv: ${conversation.id}`);
+            }
+            // LEAD_CREATED é evento de efeito colateral — fire-and-forget, não bloqueia IA
             (0, flowEngine_1.triggerFlowsByEvent)('LEAD_CREATED', content, conversation.id, lead.id)
-                .catch((e) => console.error(`${L.FLOW} | LEAD_CREATED error:`, e.message));
+                .catch((e) => console.error(`[FLOW] LEAD_CREATED error:`, e.message));
         }
         if (isNewConversation) {
+            // CONVERSATION_CREATED é evento de efeito colateral — fire-and-forget
             (0, flowEngine_1.triggerFlowsByEvent)('CONVERSATION_CREATED', content, conversation.id, lead.id)
-                .catch((e) => console.error(`${L.FLOW} | CONVERSATION_CREATED error:`, e.message));
+                .catch((e) => console.error(`[FLOW] CONVERSATION_CREATED error:`, e.message));
         }
+        // — Se fluxo conversacional executou → IA NÃO faz fallback ————————————————
+        if (conversationalFlowExecuted) {
+            console.log(`[AI_SKIPPED_FLOW_ACTIVE] | fluxo tratou a mensagem | conv: ${conversation.id}`);
+            await prisma.automationLog.create({
+                data: {
+                    type: 'AI_SKIPPED_FLOW_ACTIVE',
+                    description: `IA não respondeu — fluxo conversacional com prioridade executou`,
+                    conversationId: conversation.id,
+                    leadId: lead.id,
+                },
+            }).catch(() => { });
+            return; // Fluxo assumiu o atendimento
+        }
+        // — Nenhum fluxo conversacional ativo → IA age como fallback comercial ——————
+        console.log(`[AI_FALLBACK_USED] | nenhum fluxo ativo — IA assume como fallback | conv: ${conversation.id}`);
+        await prisma.automationLog.create({
+            data: {
+                type: 'AI_FALLBACK_USED',
+                description: `Nenhum fluxo conversacional ativo — IA comercial assume atendimento`,
+                conversationId: conversation.id,
+                leadId: lead.id,
+            },
+        }).catch(() => { });
         // ── PASSO 13 — Verificar se IA deve responder ─────────────────────────────
         // Guarda-chuva: se esta mensagem acabou de elevar a temperatura para QUENTE/URGENTE,
         // o handoff foi disparado. Bloquear aqui para evitar race condition.
@@ -441,19 +490,32 @@ async function processZapiWebhook(payload) {
             interest: freshLead?.interest ?? undefined,
             temperature: freshLead?.temperature ?? undefined,
         };
-        console.log(`${L.AI_CTX} | lead ctx: ${JSON.stringify(leadContext)} | msgs: ${chatHistory.length} | conv: ${conversation.id}`);
+        // Determinar agente comercial ativo com base no perfil do lead e qtde de mensagens
+        const inboundCount = recentMessages.filter(m => m.direction === 'INBOUND').length;
+        const agentType = (0, aiService_1.determineAgentStage)({ region: freshLead?.region, interest: freshLead?.interest, temperature: freshLead?.temperature ?? 'FRIO' }, inboundCount);
+        console.log(`${L.AI_CTX} | agente: ${agentType} | inbound: ${inboundCount} | region: ${freshLead?.region ?? 'n/a'} | interest: ${freshLead?.interest ?? 'n/a'} | conv: ${conversation.id}`);
         await prisma.automationLog.create({
             data: {
                 type: 'IA_CONTEXT_BUILT',
-                description: `Contexto montado: ${chatHistory.length} mensagens | lead conhecido: ${!!leadContext.region}`,
-                data: JSON.stringify({ leadContext, messageCount: chatHistory.length }),
+                description: `Agente: ${agentType} | ${chatHistory.length} msgs | region: ${freshLead?.region ?? 'não coletada'}`,
+                data: JSON.stringify({ agentType, leadContext, messageCount: chatHistory.length, inboundCount }),
+                conversationId: conversation.id,
+                leadId: lead.id,
+            },
+        }).catch(() => { });
+        // Logar mudança de agente para o frontend mostrar
+        await prisma.automationLog.create({
+            data: {
+                type: 'IA_AGENT_STAGE',
+                description: `Agente comercial ativo: ${agentType}`,
+                data: JSON.stringify({ agentType, inboundCount, region: freshLead?.region, interest: freshLead?.interest }),
                 conversationId: conversation.id,
                 leadId: lead.id,
             },
         }).catch(() => { });
         let aiReply;
         try {
-            aiReply = await (0, aiService_1.generateAiResponse)(conversation.id, chatHistory, conversation.storeId, leadContext);
+            aiReply = await (0, aiService_1.generateAiResponse)(conversation.id, chatHistory, conversation.storeId, leadContext, agentType);
         }
         catch (aiErr) {
             console.error(`${L.AI_ERR} | ${aiErr.message} | conv: ${conversation.id}`);
@@ -520,8 +582,7 @@ async function processZapiWebhook(payload) {
             createdAt: aiMessage.createdAt.toISOString(),
         });
         // ── PASSO 18 — Extração assíncrona de dados do lead em background ─────────
-        // A cada 4 mensagens inbound ou quando a conversa é nova, extrai cidade/interesse/pagamento
-        const inboundCount = recentMessages.filter(m => m.direction === 'INBOUND').length;
+        // inboundCount já calculado no PASSO 14. A cada 4 msgs ou nas primeiras 2, extrai dados.
         if (inboundCount > 0 && (inboundCount <= 2 || inboundCount % 4 === 0)) {
             extractAndSaveLeadData(conversation.id, conversation.storeId, lead.id, recentMessages)
                 .catch((e) => console.error('[LEAD_EXTRACT_BG] Erro:', e.message));
