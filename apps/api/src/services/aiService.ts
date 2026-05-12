@@ -49,14 +49,27 @@ Não transfira antes de saber pelo menos a cidade/região do cliente.
 Conduza com naturalidade. Seja consultivo e acolhedor. Nunca pressione.
 Seu objetivo é entender a necessidade do cliente e conectá-lo ao especialista certo.`;
 
-/** Valida se um nome de modelo pertence ao Claude/Anthropic. */
+/** Retorna true se o modelo pertence ao Claude/Anthropic. */
 function isClaudeModel(model: string): boolean {
   return model.startsWith('claude-') || model.startsWith('claude3');
 }
 
-/** Valida se um nome de modelo pertence ao OpenAI. */
-function isOpenAiModel(model: string): boolean {
-  return model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3');
+// ─── Carrega AiConfig: 1) por loja, 2) global (storeId null), 3) env ─────────
+async function loadAiConfig(storeId?: string | null): Promise<{
+  provider:     string;
+  model:        string;
+  systemPrompt: string | null;
+  temperature:  number;
+  maxTokens:    number;
+} | null> {
+  // Tenta config específica da loja
+  if (storeId) {
+    const cfg = await prisma.aiConfig.findUnique({ where: { storeId } });
+    if (cfg) return cfg;
+  }
+  // Fallback: config global (sem loja)
+  const global = await prisma.aiConfig.findFirst({ where: { storeId: null } });
+  return global ?? null;
 }
 
 export async function generateAiResponse(
@@ -65,21 +78,29 @@ export async function generateAiResponse(
   storeId?: string | null,
   leadContext?: LeadContext,
 ): Promise<string> {
-  let provider   = config.aiProvider;
-  let model      = config.aiModel;
+  let provider     = config.aiProvider;
+  let model        = config.aiModel;
   let systemPrompt = DEFAULT_SYSTEM_PROMPT;
   let temperature  = 0.7;
   let maxTokens    = 500;
 
-  // Sobrescrever com configuração por loja se existir
-  if (storeId) {
-    const aiConfig = await prisma.aiConfig.findUnique({ where: { storeId } });
-    if (aiConfig) {
-      provider     = aiConfig.provider as 'openai' | 'anthropic';
-      model        = aiConfig.model;
-      if (aiConfig.systemPrompt) systemPrompt = aiConfig.systemPrompt;
-      temperature  = aiConfig.temperature;
-      maxTokens    = aiConfig.maxTokens;
+  // Carregar configuração do banco (loja → global → env)
+  const dbConfig = await loadAiConfig(storeId);
+  if (dbConfig) {
+    provider     = dbConfig.provider as 'openai' | 'anthropic';
+    model        = dbConfig.model;
+    if (dbConfig.systemPrompt) systemPrompt = dbConfig.systemPrompt;
+    temperature  = dbConfig.temperature;
+    maxTokens    = dbConfig.maxTokens;
+  }
+
+  // ── REGRA ABSOLUTA: se ANTHROPIC_API_KEY estiver configurada, SEMPRE usar Anthropic ──
+  // Ignora qualquer valor de provider que possa estar salvo no banco (ex: 'openai' antigo).
+  if (config.anthropicApiKey) {
+    provider = 'anthropic';
+    if (!model || !isClaudeModel(model)) {
+      console.warn(`[IA] Modelo "${model}" não é Claude — substituindo por ${DEFAULT_CLAUDE_MODEL}`);
+      model = DEFAULT_CLAUDE_MODEL;
     }
   }
 
@@ -98,14 +119,6 @@ export async function generateAiResponse(
   }
 
   if (provider === 'anthropic') {
-    // Garantir modelo Claude válido — evita enviar "gpt-4o-mini" para a API Anthropic
-    if (!model || !isClaudeModel(model)) {
-      if (model) {
-        console.warn(`[IA] AI_MODEL="${model}" não é um modelo Claude válido — usando ${DEFAULT_CLAUDE_MODEL}`);
-      }
-      model = DEFAULT_CLAUDE_MODEL;
-    }
-
     console.log(`[IA] Chamando Anthropic | modelo: ${model} | conversa: ${conversationId}`);
 
     const client   = new Anthropic({ apiKey: config.anthropicApiKey });
@@ -125,16 +138,13 @@ export async function generateAiResponse(
     return reply;
 
   } else {
-    // Garantir modelo OpenAI válido
-    if (!model || !isOpenAiModel(model)) {
-      model = DEFAULT_OPENAI_MODEL;
-    }
-
-    console.log(`[IA] Chamando OpenAI | modelo: ${model} | conversa: ${conversationId}`);
+    // OpenAI — só chega aqui se ANTHROPIC_API_KEY não estiver configurada
+    const openAiModel = isClaudeModel(model) ? DEFAULT_OPENAI_MODEL : (model || DEFAULT_OPENAI_MODEL);
+    console.log(`[IA] Chamando OpenAI | modelo: ${openAiModel} | conversa: ${conversationId}`);
 
     const client   = new OpenAI({ apiKey: config.openaiApiKey });
     const response = await client.chat.completions.create({
-      model,
+      model:      openAiModel,
       temperature,
       max_tokens: maxTokens,
       messages: [
@@ -158,15 +168,14 @@ export interface ConversationAnalysis {
   resumo: string;
   proximaAcao: string;
   respostaSugerida: string;
-  // Dados de qualificação extraídos da conversa (opcionais)
-  nomeCliente?:    string | null;
-  cidade?:         string | null;
-  bairro?:         string | null;
-  regiao?:         string | null;
-  ddd?:            string | null;
+  nomeCliente?:     string | null;
+  cidade?:          string | null;
+  bairro?:          string | null;
+  regiao?:          string | null;
+  ddd?:             string | null;
   modeloInteresse?: string | null;
-  urgencia?:       'imediata' | 'proximas_semanas' | 'pesquisando' | null;
-  formaPagamento?: 'avista' | 'cartao' | 'financiamento' | 'consorcio' | null;
+  urgencia?:        'imediata' | 'proximas_semanas' | 'pesquisando' | null;
+  formaPagamento?:  'avista' | 'cartao' | 'financiamento' | 'consorcio' | null;
 }
 
 export async function analyzeConversation(
@@ -207,55 +216,37 @@ REGRAS:
 Conversa:
 ${historyText}`;
 
-  // Tentar Claude
+  // ── REGRA ABSOLUTA: se ANTHROPIC_API_KEY existir, usar Claude ────────────────
   if (config.anthropicApiKey) {
-    try {
-      let provider = 'anthropic';
-      let model = config.aiModel || 'claude-haiku-4-5-20251001';
-
-      if (storeId) {
-        const aiCfg = await prisma.aiConfig.findUnique({ where: { storeId } });
-        if (aiCfg) { provider = aiCfg.provider; model = aiCfg.model; }
-      }
-
-      if (provider === 'anthropic' || !config.openaiApiKey) {
-        if (!isClaudeModel(model)) model = 'claude-haiku-4-5-20251001';
-        const client = new Anthropic({ apiKey: config.anthropicApiKey });
-        const resp = await client.messages.create({
-          model,
-          max_tokens: 600,
-          messages: [{ role: 'user', content: analysisPrompt }],
-        });
-        const block = resp.content[0];
-        const raw = block.type === 'text' ? block.text.trim() : '';
-        const parsed = JSON.parse(raw) as ConversationAnalysis;
-        console.log('[IA] Analise Claude concluida');
-        return parsed;
-      }
-    } catch (e: any) {
-      console.warn('[IA] Claude falhou na analise, usando fallback:', e.message);
+    // Resolver modelo (loja → global → env), sempre validando que é Claude
+    let model = DEFAULT_CLAUDE_MODEL;
+    const dbConfig = await loadAiConfig(storeId);
+    if (dbConfig?.model && isClaudeModel(dbConfig.model)) {
+      model = dbConfig.model;
+    } else if (config.aiModel && isClaudeModel(config.aiModel)) {
+      model = config.aiModel;
     }
-  }
 
-  // Tentar OpenAI
-  if (config.openaiApiKey) {
     try {
-      const client = new OpenAI({ apiKey: config.openaiApiKey });
-      const resp = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+      const client = new Anthropic({ apiKey: config.anthropicApiKey });
+      const resp = await client.messages.create({
+        model,
         max_tokens: 600,
         messages: [{ role: 'user', content: analysisPrompt }],
       });
-      const raw = (resp.choices[0]?.message?.content ?? '').trim();
-      const parsed = JSON.parse(raw) as ConversationAnalysis;
-      console.log('[IA] Analise OpenAI concluida');
+      const block = resp.content[0];
+      const raw   = block.type === 'text' ? block.text.trim() : '';
+      // Remover possível markdown que Claude pode incluir
+      const clean = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+      const parsed = JSON.parse(clean) as ConversationAnalysis;
+      console.log(`[IA] Análise Claude concluída | modelo: ${model}`);
       return parsed;
     } catch (e: any) {
-      console.warn('[IA] OpenAI falhou na analise, usando fallback:', e.message);
+      console.warn('[IA] Claude falhou na análise, usando fallback por palavras-chave:', e.message);
     }
   }
 
-  // Fallback por palavras-chave
+  // Fallback por palavras-chave (sem chamada de IA externa)
   const allText = messages.map(m => m.content).join(' ').toLowerCase();
   const { temperature } = await classifyIntentAndTemperature(allText);
   const lastClientMsg = [...messages].reverse().find(m => m.direction === 'INBOUND');
@@ -273,20 +264,21 @@ ${historyText}`;
   return {
     tipo,
     temperatura: temperature,
-    resumo: lastClientMsg ? `Cliente enviou: "${lastClientMsg.content.substring(0, 80)}"` : 'Sem mensagens do cliente',
+    resumo: lastClientMsg
+      ? `Cliente enviou: "${lastClientMsg.content.substring(0, 80)}"`
+      : 'Sem mensagens do cliente',
     proximaAcao: temperature === 'URGENTE' ? 'Atender imediatamente — lead urgente'
                : temperature === 'QUENTE'  ? 'Entrar em contato rapidamente — interesse alto'
                : 'Responder ao cliente e qualificar necessidade',
     respostaSugerida: 'Olá! Obrigado por entrar em contato. Como posso te ajudar hoje?',
-    // Campos de qualificação — null no fallback (sem IA disponível)
-    nomeCliente:    null,
-    cidade:         null,
-    bairro:         null,
-    regiao:         null,
-    ddd:            null,
+    nomeCliente:     null,
+    cidade:          null,
+    bairro:          null,
+    regiao:          null,
+    ddd:             null,
     modeloInteresse: null,
-    urgencia:       null,
-    formaPagamento: null,
+    urgencia:        null,
+    formaPagamento:  null,
   };
 }
 
@@ -301,13 +293,10 @@ export async function classifyIntentAndTemperature(text: string): Promise<{
       'quero fechar', 'vou fechar', 'comprar hoje', 'fechar hoje', 'quero agora',
     ],
     QUENTE: [
-      // Interesse financeiro
       'comprar', 'fechar', 'quanto', 'preço', 'valor', 'parcela', 'financiamento',
       'entrada', 'prestação', 'orçamento', 'proposta', 'condição', 'pagamento',
-      // Disponibilidade / loja
       'disponível', 'disponibilidade', 'tem estoque', 'tem em estoque',
       'endereço', 'loja', 'onde fica', 'qual endereço', 'visitar', 'ver pessoalmente',
-      // Intenção de falar com vendedor
       'falar com vendedor', 'falar com especialista', 'quero falar', 'me passa contato',
       'me indica', 'me conecta', 'falar com alguém',
     ],
@@ -335,9 +324,9 @@ export async function classifyIntentAndTemperature(text: string): Promise<{
   }
 
   const intent =
-    lowerText.includes('preço')    || lowerText.includes('valor')   ? 'consulta_preco'   :
-    lowerText.includes('comprar')  || lowerText.includes('fechar')  ? 'intencao_compra'  :
-    lowerText.includes('dúvida')   || lowerText.includes('informação') ? 'informacao'    :
+    lowerText.includes('preço')    || lowerText.includes('valor')      ? 'consulta_preco'  :
+    lowerText.includes('comprar')  || lowerText.includes('fechar')     ? 'intencao_compra' :
+    lowerText.includes('dúvida')   || lowerText.includes('informação') ? 'informacao'      :
     'contato_inicial';
 
   return { intent, temperature, score };

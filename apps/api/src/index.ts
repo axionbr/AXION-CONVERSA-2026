@@ -41,13 +41,18 @@ app.get('/health', (_, res) => res.json({
 app.use(errorHandler);
 
 server.listen(config.port, () => {
+  // Provider efetivo: se ANTHROPIC_API_KEY estiver configurada, sempre usa Anthropic
+  const effectiveProvider = config.anthropicApiKey ? 'anthropic' : config.aiProvider;
+  const effectiveModel    = config.anthropicApiKey
+    ? (config.aiModel.startsWith('claude-') ? config.aiModel : 'claude-haiku-4-5-20251001')
+    : config.aiModel;
+
   const divider = '─'.repeat(50);
   console.log(divider);
   console.log(`🚀 AXION API | porta: ${config.port} | env: ${config.nodeEnv}`);
   console.log(`   Frontend URL : ${config.frontendUrl}`);
-  console.log(`   AI Provider  : ${config.aiProvider} | modelo: ${config.aiModel}`);
-  console.log(`   Anthropic    : ${config.anthropicApiKey ? '✓ configurado' : '✗ não configurado'}`);
-  console.log(`   OpenAI       : ${config.openaiApiKey    ? '✓ configurado' : '✗ não configurado'}`);
+  console.log(`   AI Provider  : ${effectiveProvider} | modelo: ${effectiveModel}`);
+  console.log(`   Anthropic    : ${config.anthropicApiKey ? '✓ configurado (provider ativo)' : '✗ não configurado'}`);
   console.log(`   Z-API        : ${config.zapi.instanceId ? `✓ instância: ${config.zapi.instanceId}` : '✗ não configurado'}`);
   console.log(`   Webhook Sec  : ${config.webhookSecret   ? '✓ ativo' : '⚠ sem secret (aberto)'}`);
   console.log(`   JWT Secret   : ${config.jwtSecret === 'axion-dev-insecure-2026' ? '⚠ padrão de dev' : '✓ personalizado'}`);
