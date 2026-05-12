@@ -415,36 +415,42 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     let conversationalFlowExecuted = false;
 
     // — Eventos conversacionais: aguardados, resultado decide se IA roda ———————
-    const mrExec = await triggerFlowsByEvent('MESSAGE_RECEIVED', content, conversation.id, lead.id)
-      .catch((e: any) => { console.error(`[FLOW] MESSAGE_RECEIVED error:`, e.message); return false; });
-    if (mrExec) {
-      conversationalFlowExecuted = true;
-      console.log(`[FLOW_MATCHED] | MESSAGE_RECEIVED | conv: ${conversation.id}`);
-    }
+    const convId  = conversation.id;
+    const leadId_ = lead.id;
 
-    const kwExec = await triggerFlowsByEvent('KEYWORD', content, conversation.id, lead.id)
-      .catch((e: any) => { console.error(`[FLOW] KEYWORD error:`, e.message); return false; });
-    if (kwExec) {
-      conversationalFlowExecuted = true;
-      console.log(`[FLOW_MATCHED] | KEYWORD | conv: ${conversation.id}`);
-    }
+    // Macro local: executa fluxo conversacional e salva FLOW_MATCHED no banco se executou
+    const checkFlow = async (eventType: string, val: string): Promise<boolean> => {
+      const executed = await triggerFlowsByEvent(eventType, val, convId, leadId_)
+        .catch((e: any) => { console.error(`[FLOW] ${eventType} error:`, e.message); return false; });
+      if (executed) {
+        console.log(`[FLOW_MATCHED] | ${eventType} | conv: ${convId}`);
+        prisma.automationLog.create({
+          data: {
+            type:           'FLOW_MATCHED',
+            description:    `Fluxo conversacional "${eventType}" correspondeu — será executado`,
+            data:           JSON.stringify({ eventType }),
+            conversationId: convId,
+            leadId:         leadId_,
+          },
+        }).catch(() => {});
+      }
+      return executed;
+    };
+
+    if (await checkFlow('MESSAGE_RECEIVED', content)) conversationalFlowExecuted = true;
+    if (await checkFlow('KEYWORD',          content)) conversationalFlowExecuted = true;
 
     if (isNewLead) {
-      const fmExec = await triggerFlowsByEvent('FIRST_MESSAGE', content, conversation.id, lead.id)
-        .catch((e: any) => { console.error(`[FLOW] FIRST_MESSAGE error:`, e.message); return false; });
-      if (fmExec) {
-        conversationalFlowExecuted = true;
-        console.log(`[FLOW_MATCHED] | FIRST_MESSAGE | conv: ${conversation.id}`);
-      }
+      if (await checkFlow('FIRST_MESSAGE', content)) conversationalFlowExecuted = true;
 
       // LEAD_CREATED é evento de efeito colateral — fire-and-forget, não bloqueia IA
-      triggerFlowsByEvent('LEAD_CREATED', content, conversation.id, lead.id)
+      triggerFlowsByEvent('LEAD_CREATED', content, convId, leadId_)
         .catch((e: any) => console.error(`[FLOW] LEAD_CREATED error:`, e.message));
     }
 
     if (isNewConversation) {
       // CONVERSATION_CREATED é evento de efeito colateral — fire-and-forget
-      triggerFlowsByEvent('CONVERSATION_CREATED', content, conversation.id, lead.id)
+      triggerFlowsByEvent('CONVERSATION_CREATED', content, convId, leadId_)
         .catch((e: any) => console.error(`[FLOW] CONVERSATION_CREATED error:`, e.message));
     }
 
