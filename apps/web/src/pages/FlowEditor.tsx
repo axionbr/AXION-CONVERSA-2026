@@ -19,21 +19,29 @@ import { cn } from '../lib/utils';
 // ─── Node type definitions ────────────────────────────────────────────────────
 
 const NODE_TYPES_DEF = [
-  { type: 'START',        label: 'Início',        icon: Flag,         color: '#10b981', description: 'Ponto de entrada do fluxo' },
-  { type: 'END',          label: 'Fim',            icon: Flag,         color: '#ef4444', description: 'Finaliza o fluxo' },
-  { type: 'MESSAGE',      label: 'Mensagem',       icon: MessageSquare,color: '#3b82f6', description: 'Envia mensagem de texto' },
-  { type: 'QUESTION',     label: 'Pergunta',       icon: HelpCircle,   color: '#8b5cf6', description: 'Aguarda resposta do contato' },
-  { type: 'CONDITION',    label: 'Condição',       icon: GitBranch,    color: '#f59e0b', description: 'Ramifica baseado em regra' },
-  { type: 'AI_RESPONSE',  label: 'Resposta IA',    icon: Bot,          color: '#ec4899', description: 'Gera resposta com IA' },
-  { type: 'SET_TAG',      label: 'Aplicar Tag',    icon: Tag,          color: '#06b6d4', description: 'Aplica uma tag ao lead' },
-  { type: 'REMOVE_TAG',   label: 'Remover Tag',    icon: Tag,          color: '#64748b', description: 'Remove tag do lead' },
-  { type: 'SET_FIELD',    label: 'Definir Campo',  icon: Settings,     color: '#f97316', description: 'Salva campo personalizado' },
-  { type: 'ASSIGN_USER',  label: 'Transferir',     icon: User,         color: '#3b82f6', description: 'Transfere para atendente' },
-  { type: 'ASSIGN_STORE', label: 'Atribuir Loja',  icon: Store,        color: '#10b981', description: 'Atribui a uma loja' },
-  { type: 'PAUSE_AI',     label: 'Pausar IA',      icon: Pause,        color: '#f59e0b', description: 'Desativa a IA' },
-  { type: 'RESUME_AI',    label: 'Ativar IA',      icon: Play,         color: '#10b981', description: 'Reativa a IA' },
-  { type: 'WEBHOOK',      label: 'Webhook',        icon: Globe,        color: '#6366f1', description: 'Chama API externa' },
-  { type: 'DELAY',        label: 'Aguardar',       icon: Clock,        color: '#94a3b8', description: 'Pausa antes do próximo nó' },
+  // ── Controle de fluxo ────────────────────────────────────────────────────────
+  { type: 'START',           label: 'Início',             icon: Flag,         color: '#10b981', description: 'Ponto de entrada do fluxo' },
+  { type: 'END',             label: 'Fim',                icon: Flag,         color: '#ef4444', description: 'Finaliza o fluxo' },
+  { type: 'CONDITION',       label: 'Condição',           icon: GitBranch,    color: '#f59e0b', description: 'Ramifica baseado em regra' },
+  { type: 'DELAY',           label: 'Aguardar',           icon: Clock,        color: '#94a3b8', description: 'Pausa antes do próximo nó' },
+  // ── Mensagens ────────────────────────────────────────────────────────────────
+  { type: 'MESSAGE',         label: 'Mensagem Fixa',      icon: MessageSquare,color: '#3b82f6', description: 'Envia mensagem de texto estática' },
+  { type: 'QUESTION',        label: 'Pergunta',           icon: HelpCircle,   color: '#8b5cf6', description: 'Aguarda resposta do contato' },
+  // ── Agentes Comerciais IA (têm prioridade sobre IA autônoma) ─────────────────
+  { type: 'AGENT_SDR',       label: 'Agente SDR',         icon: Bot,          color: '#0ea5e9', description: 'Primeiro contato: recebe e entende intenção' },
+  { type: 'AGENT_QUALIFIER', label: 'Agente Qualificador',icon: Bot,          color: '#f59e0b', description: 'Coleta cidade, interesse e perfil' },
+  { type: 'AGENT_CONSULTANT',label: 'Agente Consultor',   icon: Bot,          color: '#10b981', description: 'Orienta consultivamente sobre o produto' },
+  { type: 'AGENT_HANDOFF',   label: 'Agente Handoff',     icon: User,         color: '#ef4444', description: 'Transfere para vendedor humano' },
+  { type: 'AI_RESPONSE',     label: 'IA Automática',      icon: Bot,          color: '#ec4899', description: 'Resposta IA com agente auto-detectado' },
+  // ── Ações sobre lead/conversa ────────────────────────────────────────────────
+  { type: 'SET_TAG',         label: 'Aplicar Tag',        icon: Tag,          color: '#06b6d4', description: 'Aplica uma tag ao lead' },
+  { type: 'REMOVE_TAG',      label: 'Remover Tag',        icon: Tag,          color: '#64748b', description: 'Remove tag do lead' },
+  { type: 'SET_FIELD',       label: 'Definir Campo',      icon: Settings,     color: '#f97316', description: 'Salva campo personalizado' },
+  { type: 'ASSIGN_USER',     label: 'Transferir Humano',  icon: User,         color: '#3b82f6', description: 'Transfere para atendente específico' },
+  { type: 'ASSIGN_STORE',    label: 'Atribuir Loja',      icon: Store,        color: '#10b981', description: 'Atribui a uma loja' },
+  { type: 'PAUSE_AI',        label: 'Pausar IA',          icon: Pause,        color: '#f59e0b', description: 'Desativa a IA nesta conversa' },
+  { type: 'RESUME_AI',       label: 'Ativar IA',          icon: Play,         color: '#10b981', description: 'Reativa a IA' },
+  { type: 'WEBHOOK',         label: 'Webhook',            icon: Globe,        color: '#6366f1', description: 'Chama API externa' },
 ];
 
 const typeMap = Object.fromEntries(NODE_TYPES_DEF.map(t => [t.type, t]));
@@ -97,11 +105,15 @@ const nodeTypes: NodeTypes = { custom: FlowNode };
 // ─── Trigger labels ───────────────────────────────────────────────────────────
 
 const TRIGGER_TYPES = [
-  { value: 'FIRST_MESSAGE',       label: 'Primeira Mensagem' },
-  { value: 'KEYWORD',             label: 'Palavra-chave' },
-  { value: 'TAG_APPLIED',         label: 'Tag Aplicada' },
-  { value: 'TEMPERATURE_CHANGED', label: 'Temperatura Alterada' },
+  // ── Conversacionais (têm prioridade absoluta sobre IA autônoma) ──────────────
+  { value: 'MESSAGE_RECEIVED',    label: '📩 Mensagem Recebida (prioridade)' },
+  { value: 'FIRST_MESSAGE',       label: '👋 Primeira Mensagem (prioridade)' },
+  { value: 'KEYWORD',             label: '🔑 Palavra-chave (prioridade)' },
+  // ── Eventos de lead ───────────────────────────────────────────────────────────
   { value: 'LEAD_CREATED',        label: 'Lead Criado' },
+  { value: 'LEAD_HOT',            label: '🔥 Lead Quente/Urgente' },
+  { value: 'TEMPERATURE_CHANGED', label: 'Temperatura Alterada' },
+  { value: 'TAG_APPLIED',         label: 'Tag Aplicada' },
   { value: 'STATUS_CHANGED',      label: 'Status Alterado' },
   { value: 'NO_RESPONSE',         label: 'Sem Resposta (+30min)' },
   { value: 'AFTER_HOURS',         label: 'Fora de Horário' },

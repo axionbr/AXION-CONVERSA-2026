@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { classifyIntentAndTemperature, generateAiResponse, analyzeConversation, determineAgentStage, LeadContext, AgentType } from './aiService';
 import { sendTextMessage } from './zapiService';
 import { emitNewMessage, emitConversationUpdate, emitNewConversation } from '../socket';
-import { triggerFlowsByEvent } from './flowEngine';
+import { triggerFlowsByEvent, CONVERSATIONAL_EVENTS } from './flowEngine';
 import { initiateHandoff, checkExpiredNotifications } from './handoffService';
 
 const prisma = new PrismaClient();
@@ -398,25 +398,80 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       },
     });
 
-    // ── PASSO 12 — Gatilhos de fluxo ──────────────────────────────────────────
-    triggerFlowsByEvent('KEYWORD', content, conversation.id, lead.id)
-      .catch((e: any) => console.error(`${L.FLOW} | KEYWORD error:`, e.message));
+    // ── PASSO 12 — VERIFICAÇÃO DE PRIORIDADE DE FLUXO ────────────────────────
+    // Regra: se existe fluxo ativo que responde a esta mensagem, ELE tem prioridade.
+    // A IA autônoma só age como fallback quando nenhum fluxo conversacional está ativo.
 
-    // Evento MESSAGE_RECEIVED para todos os fluxos que escutam mensagens
-    triggerFlowsByEvent('MESSAGE_RECEIVED', content, conversation.id, lead.id)
-      .catch((e: any) => console.error(`${L.FLOW} | MESSAGE_RECEIVED error:`, e.message));
+    console.log(`[FLOW_PRIORITY_CHECK] | conv: ${conversation.id} | lead: ${lead.id}`);
+    await prisma.automationLog.create({
+      data: {
+        type:           'FLOW_PRIORITY_CHECK',
+        description:    `Verificando fluxos ativos para mensagem recebida`,
+        conversationId: conversation.id,
+        leadId:         lead.id,
+      },
+    }).catch(() => {});
+
+    let conversationalFlowExecuted = false;
+
+    // — Eventos conversacionais: aguardados, resultado decide se IA roda ———————
+    const mrExec = await triggerFlowsByEvent('MESSAGE_RECEIVED', content, conversation.id, lead.id)
+      .catch((e: any) => { console.error(`[FLOW] MESSAGE_RECEIVED error:`, e.message); return false; });
+    if (mrExec) {
+      conversationalFlowExecuted = true;
+      console.log(`[FLOW_MATCHED] | MESSAGE_RECEIVED | conv: ${conversation.id}`);
+    }
+
+    const kwExec = await triggerFlowsByEvent('KEYWORD', content, conversation.id, lead.id)
+      .catch((e: any) => { console.error(`[FLOW] KEYWORD error:`, e.message); return false; });
+    if (kwExec) {
+      conversationalFlowExecuted = true;
+      console.log(`[FLOW_MATCHED] | KEYWORD | conv: ${conversation.id}`);
+    }
 
     if (isNewLead) {
-      triggerFlowsByEvent('FIRST_MESSAGE', content, conversation.id, lead.id)
-        .catch((e: any) => console.error(`${L.FLOW} | FIRST_MESSAGE error:`, e.message));
+      const fmExec = await triggerFlowsByEvent('FIRST_MESSAGE', content, conversation.id, lead.id)
+        .catch((e: any) => { console.error(`[FLOW] FIRST_MESSAGE error:`, e.message); return false; });
+      if (fmExec) {
+        conversationalFlowExecuted = true;
+        console.log(`[FLOW_MATCHED] | FIRST_MESSAGE | conv: ${conversation.id}`);
+      }
+
+      // LEAD_CREATED é evento de efeito colateral — fire-and-forget, não bloqueia IA
       triggerFlowsByEvent('LEAD_CREATED', content, conversation.id, lead.id)
-        .catch((e: any) => console.error(`${L.FLOW} | LEAD_CREATED error:`, e.message));
+        .catch((e: any) => console.error(`[FLOW] LEAD_CREATED error:`, e.message));
     }
 
     if (isNewConversation) {
+      // CONVERSATION_CREATED é evento de efeito colateral — fire-and-forget
       triggerFlowsByEvent('CONVERSATION_CREATED', content, conversation.id, lead.id)
-        .catch((e: any) => console.error(`${L.FLOW} | CONVERSATION_CREATED error:`, e.message));
+        .catch((e: any) => console.error(`[FLOW] CONVERSATION_CREATED error:`, e.message));
     }
+
+    // — Se fluxo conversacional executou → IA NÃO faz fallback ————————————————
+    if (conversationalFlowExecuted) {
+      console.log(`[AI_SKIPPED_FLOW_ACTIVE] | fluxo tratou a mensagem | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'AI_SKIPPED_FLOW_ACTIVE',
+          description:    `IA não respondeu — fluxo conversacional com prioridade executou`,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
+      return; // Fluxo assumiu o atendimento
+    }
+
+    // — Nenhum fluxo conversacional ativo → IA age como fallback comercial ——————
+    console.log(`[AI_FALLBACK_USED] | nenhum fluxo ativo — IA assume como fallback | conv: ${conversation.id}`);
+    await prisma.automationLog.create({
+      data: {
+        type:           'AI_FALLBACK_USED',
+        description:    `Nenhum fluxo conversacional ativo — IA comercial assume atendimento`,
+        conversationId: conversation.id,
+        leadId:         lead.id,
+      },
+    }).catch(() => {});
 
     // ── PASSO 13 — Verificar se IA deve responder ─────────────────────────────
 
