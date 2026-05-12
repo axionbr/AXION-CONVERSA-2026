@@ -356,32 +356,40 @@ async function processZapiWebhook(payload) {
         }).catch(() => { });
         let conversationalFlowExecuted = false;
         // — Eventos conversacionais: aguardados, resultado decide se IA roda ———————
-        const mrExec = await (0, flowEngine_1.triggerFlowsByEvent)('MESSAGE_RECEIVED', content, conversation.id, lead.id)
-            .catch((e) => { console.error(`[FLOW] MESSAGE_RECEIVED error:`, e.message); return false; });
-        if (mrExec) {
-            conversationalFlowExecuted = true;
-            console.log(`[FLOW_MATCHED] | MESSAGE_RECEIVED | conv: ${conversation.id}`);
-        }
-        const kwExec = await (0, flowEngine_1.triggerFlowsByEvent)('KEYWORD', content, conversation.id, lead.id)
-            .catch((e) => { console.error(`[FLOW] KEYWORD error:`, e.message); return false; });
-        if (kwExec) {
-            conversationalFlowExecuted = true;
-            console.log(`[FLOW_MATCHED] | KEYWORD | conv: ${conversation.id}`);
-        }
-        if (isNewLead) {
-            const fmExec = await (0, flowEngine_1.triggerFlowsByEvent)('FIRST_MESSAGE', content, conversation.id, lead.id)
-                .catch((e) => { console.error(`[FLOW] FIRST_MESSAGE error:`, e.message); return false; });
-            if (fmExec) {
-                conversationalFlowExecuted = true;
-                console.log(`[FLOW_MATCHED] | FIRST_MESSAGE | conv: ${conversation.id}`);
+        const convId = conversation.id;
+        const leadId_ = lead.id;
+        // Macro local: executa fluxo conversacional e salva FLOW_MATCHED no banco se executou
+        const checkFlow = async (eventType, val) => {
+            const executed = await (0, flowEngine_1.triggerFlowsByEvent)(eventType, val, convId, leadId_)
+                .catch((e) => { console.error(`[FLOW] ${eventType} error:`, e.message); return false; });
+            if (executed) {
+                console.log(`[FLOW_MATCHED] | ${eventType} | conv: ${convId}`);
+                prisma.automationLog.create({
+                    data: {
+                        type: 'FLOW_MATCHED',
+                        description: `Fluxo conversacional "${eventType}" correspondeu — será executado`,
+                        data: JSON.stringify({ eventType }),
+                        conversationId: convId,
+                        leadId: leadId_,
+                    },
+                }).catch(() => { });
             }
+            return executed;
+        };
+        if (await checkFlow('MESSAGE_RECEIVED', content))
+            conversationalFlowExecuted = true;
+        if (await checkFlow('KEYWORD', content))
+            conversationalFlowExecuted = true;
+        if (isNewLead) {
+            if (await checkFlow('FIRST_MESSAGE', content))
+                conversationalFlowExecuted = true;
             // LEAD_CREATED é evento de efeito colateral — fire-and-forget, não bloqueia IA
-            (0, flowEngine_1.triggerFlowsByEvent)('LEAD_CREATED', content, conversation.id, lead.id)
+            (0, flowEngine_1.triggerFlowsByEvent)('LEAD_CREATED', content, convId, leadId_)
                 .catch((e) => console.error(`[FLOW] LEAD_CREATED error:`, e.message));
         }
         if (isNewConversation) {
             // CONVERSATION_CREATED é evento de efeito colateral — fire-and-forget
-            (0, flowEngine_1.triggerFlowsByEvent)('CONVERSATION_CREATED', content, conversation.id, lead.id)
+            (0, flowEngine_1.triggerFlowsByEvent)('CONVERSATION_CREATED', content, convId, leadId_)
                 .catch((e) => console.error(`[FLOW] CONVERSATION_CREATED error:`, e.message));
         }
         // — Se fluxo conversacional executou → IA NÃO faz fallback ————————————————
