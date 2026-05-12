@@ -46,6 +46,50 @@ const NODE_TYPES_DEF = [
 
 const typeMap = Object.fromEntries(NODE_TYPES_DEF.map(t => [t.type, t]));
 
+// ─── Inputs estáveis para o painel de configuração ────────────────────────────
+// IMPORTANTE: definidos FORA de qualquer componente para que a referência seja
+// estável entre re-renders. Se fossem definidos dentro de NodeConfigPanel, React
+// os desmontaria a cada tecla digitada, causando perda de foco.
+
+interface ConfigFieldProps {
+  value: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  placeholder?: string;
+  type?: string;
+}
+function ConfigField({ value, onChange, onBlur, placeholder, type = 'text' }: ConfigFieldProps) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      onBlur={onBlur}
+      placeholder={placeholder}
+      className="w-full bg-input text-sm px-3 py-2 rounded-lg border border-border focus:border-primary outline-none"
+    />
+  );
+}
+
+interface ConfigAreaProps {
+  value: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  placeholder?: string;
+}
+function ConfigArea({ value, onChange, onBlur, placeholder }: ConfigAreaProps) {
+  return (
+    <textarea
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      onBlur={onBlur}
+      placeholder={placeholder}
+      rows={3}
+      className="w-full bg-input text-sm px-3 py-2 rounded-lg border border-border focus:border-primary outline-none resize-none"
+    />
+  );
+}
+
 // ─── Custom Node Component ─────────────────────────────────────────────────────
 
 function FlowNode({ data, selected }: any) {
@@ -120,6 +164,8 @@ const TRIGGER_TYPES = [
 ];
 
 // ─── Node config panel ────────────────────────────────────────────────────────
+// Recebe `key={node.id}` do pai para remontar ao trocar de nó selecionado.
+// Internamente usa estado local + salva apenas no onBlur para não perder foco.
 
 function NodeConfigPanel({
   node, onUpdate, onDelete,
@@ -128,33 +174,17 @@ function NodeConfigPanel({
   const [config, setConfig] = useState<any>(node.data.config || {});
   const def = typeMap[node.data.type];
 
+  // Salva no componente pai apenas no onBlur (não a cada tecla)
   function save() {
     onUpdate(node.id, { ...node.data, label, config });
   }
 
-  const Field = ({
-    field, placeholder, type = 'text',
-  }: { field: string; placeholder: string; type?: string }) => (
-    <input
-      type={type}
-      value={config[field] || ''}
-      onChange={e => setConfig((c: any) => ({ ...c, [field]: e.target.value }))}
-      onBlur={save}
-      placeholder={placeholder}
-      className="w-full bg-input text-sm px-3 py-2 rounded-lg border border-border focus:border-primary outline-none"
-    />
-  );
-
-  const Area = ({ field, placeholder }: { field: string; placeholder: string }) => (
-    <textarea
-      value={config[field] || ''}
-      onChange={e => setConfig((c: any) => ({ ...c, [field]: e.target.value }))}
-      onBlur={save}
-      placeholder={placeholder}
-      rows={3}
-      className="w-full bg-input text-sm px-3 py-2 rounded-lg border border-border focus:border-primary outline-none resize-none"
-    />
-  );
+  // Helpers locais — usam ConfigField/ConfigArea definidos fora (referências estáveis)
+  const fieldProps = (field: string) => ({
+    value:    config[field] || '',
+    onChange: (v: string) => setConfig((c: any) => ({ ...c, [field]: v })),
+    onBlur:   save,
+  });
 
   return (
     <div className="space-y-3">
@@ -170,19 +200,18 @@ function NodeConfigPanel({
 
       <div>
         <label className="text-xs text-muted-foreground block mb-1">Rótulo</label>
-        <input
+        <ConfigField
           value={label}
-          onChange={e => setLabel(e.target.value)}
+          onChange={setLabel}
           onBlur={save}
           placeholder="Nome do nó..."
-          className="w-full bg-input text-sm px-3 py-2 rounded-lg border border-border focus:border-primary outline-none"
         />
       </div>
 
       {node.data.type === 'MESSAGE' && (
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Mensagem</label>
-          <Area field="text" placeholder="Digite a mensagem..." />
+          <ConfigArea {...fieldProps('text')} placeholder="Digite a mensagem..." />
         </div>
       )}
 
@@ -190,11 +219,11 @@ function NodeConfigPanel({
         <>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Pergunta</label>
-            <Area field="text" placeholder="Digite a pergunta..." />
+            <ConfigArea {...fieldProps('text')} placeholder="Digite a pergunta..." />
           </div>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Salvar resposta no campo</label>
-            <Field field="saveToField" placeholder="chave_do_campo" />
+            <ConfigField {...fieldProps('saveToField')} placeholder="chave_do_campo" />
           </div>
         </>
       )}
@@ -229,7 +258,7 @@ function NodeConfigPanel({
             </div>
             <div>
               <label className="text-xs text-muted-foreground block mb-1">Valor</label>
-              <Field field="value" placeholder="Valor..." />
+              <ConfigField {...fieldProps('value')} placeholder="Valor..." />
             </div>
           </div>
         </div>
@@ -238,7 +267,7 @@ function NodeConfigPanel({
       {(node.data.type === 'SET_TAG' || node.data.type === 'REMOVE_TAG') && (
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Nome da Tag</label>
-          <Field field="tagName" placeholder="ex: VIP" />
+          <ConfigField {...fieldProps('tagName')} placeholder="ex: VIP" />
         </div>
       )}
 
@@ -246,11 +275,11 @@ function NodeConfigPanel({
         <>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Chave do Campo</label>
-            <Field field="fieldKey" placeholder="ex: veiculo_interesse" />
+            <ConfigField {...fieldProps('fieldKey')} placeholder="ex: veiculo_interesse" />
           </div>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Valor</label>
-            <Field field="value" placeholder="ex: Honda CG 160" />
+            <ConfigField {...fieldProps('value')} placeholder="ex: Honda CG 160" />
           </div>
         </>
       )}
@@ -258,14 +287,14 @@ function NodeConfigPanel({
       {node.data.type === 'ASSIGN_USER' && (
         <div>
           <label className="text-xs text-muted-foreground block mb-1">ID do Usuário</label>
-          <Field field="userId" placeholder="ID do atendente" />
+          <ConfigField {...fieldProps('userId')} placeholder="ID do atendente" />
         </div>
       )}
 
       {node.data.type === 'ASSIGN_STORE' && (
         <div>
           <label className="text-xs text-muted-foreground block mb-1">ID da Loja</label>
-          <Field field="storeId" placeholder="ID da loja" />
+          <ConfigField {...fieldProps('storeId')} placeholder="ID da loja" />
         </div>
       )}
 
@@ -273,7 +302,7 @@ function NodeConfigPanel({
         <>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Tempo</label>
-            <Field field="delay" placeholder="5" type="number" />
+            <ConfigField {...fieldProps('delay')} type="number" placeholder="5" />
           </div>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Unidade</label>
@@ -304,7 +333,7 @@ function NodeConfigPanel({
           </div>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">URL</label>
-            <Field field="url" placeholder="https://..." />
+            <ConfigField {...fieldProps('url')} placeholder="https://..." />
           </div>
         </>
       )}
@@ -760,7 +789,10 @@ function FlowEditorCanvas() {
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3">
+                  {/* key={selectedNode.id} garante que o estado local do painel
+                      é resetado ao trocar de nó, sem afetar o foco durante digitação */}
                   <NodeConfigPanel
+                    key={selectedNode.id}
                     node={selectedNode}
                     onUpdate={updateNodeData}
                     onDelete={deleteNode}
