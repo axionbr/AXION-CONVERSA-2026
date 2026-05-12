@@ -8,6 +8,15 @@ const prisma = new PrismaClient();
 const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 
+// ─── Contexto do lead para injetar no prompt ─────────────────────────────────
+export interface LeadContext {
+  name?:           string | null;
+  region?:         string | null;
+  interest?:       string | null;
+  temperature?:    string | null;
+  formaPagamento?: string | null;
+}
+
 // ─── Prompt comercial — SDR/Consultora Tecle Motos ───────────────────────────
 const DEFAULT_SYSTEM_PROMPT = `Você é a Ana, consultora comercial da Tecle Motos, especialista em scooters e motos elétricas.
 
@@ -22,17 +31,20 @@ COMO ATENDER:
 - Linguagem brasileira informal e amigável.
 
 QUALIFICAÇÃO (de forma natural, sem parecer interrogatório):
-1. Nome do cliente — se ainda não apresentado
+Colete estas informações na ordem que surgir naturalmente na conversa:
+1. Nome do cliente — se ainda não se apresentou
 2. Cidade, bairro ou região — para indicar a unidade mais próxima
-3. Modelo ou tipo de interesse — scooter elétrica, moto elétrica, qual modelo
-4. Uso pretendido — trabalho, lazer, deslocamento, entrega/delivery
-5. Urgência — só está pesquisando, ou quer comprar em breve?
-6. Pagamento — à vista, cartão, financiamento, consórcio
+3. Modelo ou tipo de interesse — scooter elétrica, moto elétrica, qual modelo, uso para delivery?
+4. Urgência — só está pesquisando, quer comprar em breve, ou quer visitar a loja?
+5. Pagamento — à vista, cartão, financiamento, consórcio
+
+REGRA DE OURO: Se o dado já foi coletado (consta no CONTEXTO DO LEAD abaixo), NÃO pergunte de novo.
+Passe para a próxima informação ainda não coletada.
 
 QUANDO TRANSFERIR PARA ESPECIALISTA:
-Quando o cliente demonstrar intenção clara (perguntou preço/parcela/financiamento,
-pediu endereço da loja, quer ver pessoalmente, perguntou disponibilidade, disse
-"quero fechar" ou "vou aí"), prepare para conectar ao especialista de vendas.
+Quando o cliente demonstrar intenção clara de compra, pediu preço, parcela, financiamento,
+endereço da loja, disponibilidade de estoque, ou disse que quer visitar, fechar ou comprar agora.
+Não transfira antes de saber pelo menos a cidade/região do cliente.
 
 Conduza com naturalidade. Seja consultivo e acolhedor. Nunca pressione.
 Seu objetivo é entender a necessidade do cliente e conectá-lo ao especialista certo.`;
@@ -51,6 +63,7 @@ export async function generateAiResponse(
   conversationId: string,
   messages: { role: 'user' | 'assistant'; content: string }[],
   storeId?: string | null,
+  leadContext?: LeadContext,
 ): Promise<string> {
   let provider   = config.aiProvider;
   let model      = config.aiModel;
@@ -67,6 +80,20 @@ export async function generateAiResponse(
       if (aiConfig.systemPrompt) systemPrompt = aiConfig.systemPrompt;
       temperature  = aiConfig.temperature;
       maxTokens    = aiConfig.maxTokens;
+    }
+  }
+
+  // Injetar contexto do lead no prompt para evitar perguntas repetidas
+  if (leadContext) {
+    const parts: string[] = [];
+    if (leadContext.name)           parts.push(`- Nome: ${leadContext.name}`);
+    if (leadContext.region)         parts.push(`- Cidade/região: ${leadContext.region}`);
+    if (leadContext.interest)       parts.push(`- Produto de interesse: ${leadContext.interest}`);
+    if (leadContext.formaPagamento) parts.push(`- Forma de pagamento: ${leadContext.formaPagamento}`);
+    if (leadContext.temperature)    parts.push(`- Temperatura do lead: ${leadContext.temperature}`);
+
+    if (parts.length > 0) {
+      systemPrompt += `\n\nCONTEXTO DO LEAD (dados já coletados — NÃO PERGUNTE DE NOVO):\n${parts.join('\n')}\n\nAvance para a próxima informação da qualificação que ainda não foi coletada.`;
     }
   }
 

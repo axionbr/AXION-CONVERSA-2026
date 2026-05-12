@@ -16,6 +16,8 @@ export async function triggerFlowsByEvent(
     include: { flow: { include: { nodes: true, edges: true } } },
   });
 
+  if (triggers.length === 0) return;
+
   for (const trigger of triggers) {
     if (!trigger.flow.active) continue;
 
@@ -24,7 +26,29 @@ export async function triggerFlowsByEvent(
       if (!value.toLowerCase().includes(keyword)) continue;
     }
 
-    await executeFlow(trigger.flow.id, conversationId, leadId);
+    try {
+      await executeFlow(trigger.flow.id, conversationId, leadId);
+      await prisma.automationLog.create({
+        data: {
+          type:           'FLOW_EVENT_TRIGGERED',
+          description:    `Fluxo "${trigger.flow.name}" disparado por evento ${eventType}`,
+          data:           JSON.stringify({ eventType, value: value.substring(0, 100), flowId: trigger.flow.id }),
+          conversationId,
+          leadId,
+        },
+      }).catch(() => {});
+    } catch (flowErr: any) {
+      console.error(`[FLOW_EVENT_FAILED] | evento: ${eventType} | fluxo: ${trigger.flow.id} | erro:`, flowErr.message);
+      await prisma.automationLog.create({
+        data: {
+          type:           'FLOW_EVENT_FAILED',
+          description:    `Falha ao executar fluxo "${trigger.flow.name}": ${flowErr.message}`,
+          data:           JSON.stringify({ eventType, flowId: trigger.flow.id, error: flowErr.message }),
+          conversationId,
+          leadId,
+        },
+      }).catch(() => {});
+    }
   }
 }
 
@@ -112,15 +136,18 @@ async function executeNode(
           const msg = await prisma.message.create({
             data: {
               conversationId,
-              direction: 'OUTBOUND',
-              type: 'TEXT',
-              content: config.text,
-              fromFlow: true,
+              direction:  'OUTBOUND',
+              type:       'TEXT',
+              content:    config.text,
+              senderType: 'FLOW',
+              fromFlow:   true,
               flowNodeId: nodeId,
             },
           });
 
-          await sendTextMessage(conversation.contact.phone, config.text, conversation.storeId).catch(
+          // contact.phone é normalizado (sem DDI); Z-API precisa do "55" prefixado
+          const zapiPhone = `55${conversation.contact.phone}`;
+          await sendTextMessage(zapiPhone, config.text, conversation.storeId).catch(
             (e: any) => console.error('Flow Z-API error:', e.message)
           );
 
@@ -163,15 +190,18 @@ async function executeNode(
           const msg = await prisma.message.create({
             data: {
               conversationId,
-              direction: 'OUTBOUND',
-              type: 'TEXT',
-              content: aiReply,
-              fromFlow: true,
+              direction:  'OUTBOUND',
+              type:       'TEXT',
+              content:    aiReply,
+              senderType: 'AI',
+              fromFlow:   true,
               flowNodeId: nodeId,
             },
           });
 
-          await sendTextMessage(conversation.contact.phone, aiReply, conversation.storeId).catch(
+          // contact.phone é normalizado (sem DDI); Z-API precisa do "55" prefixado
+          const zapiPhone = `55${conversation.contact.phone}`;
+          await sendTextMessage(zapiPhone, aiReply, conversation.storeId).catch(
             (e: any) => console.error('Flow Z-API error:', e.message)
           );
 

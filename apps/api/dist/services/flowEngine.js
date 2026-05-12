@@ -12,6 +12,8 @@ async function triggerFlowsByEvent(eventType, value, conversationId, leadId) {
         where: { type: eventType, active: true },
         include: { flow: { include: { nodes: true, edges: true } } },
     });
+    if (triggers.length === 0)
+        return;
     for (const trigger of triggers) {
         if (!trigger.flow.active)
             continue;
@@ -20,7 +22,30 @@ async function triggerFlowsByEvent(eventType, value, conversationId, leadId) {
             if (!value.toLowerCase().includes(keyword))
                 continue;
         }
-        await executeFlow(trigger.flow.id, conversationId, leadId);
+        try {
+            await executeFlow(trigger.flow.id, conversationId, leadId);
+            await prisma.automationLog.create({
+                data: {
+                    type: 'FLOW_EVENT_TRIGGERED',
+                    description: `Fluxo "${trigger.flow.name}" disparado por evento ${eventType}`,
+                    data: JSON.stringify({ eventType, value: value.substring(0, 100), flowId: trigger.flow.id }),
+                    conversationId,
+                    leadId,
+                },
+            }).catch(() => { });
+        }
+        catch (flowErr) {
+            console.error(`[FLOW_EVENT_FAILED] | evento: ${eventType} | fluxo: ${trigger.flow.id} | erro:`, flowErr.message);
+            await prisma.automationLog.create({
+                data: {
+                    type: 'FLOW_EVENT_FAILED',
+                    description: `Falha ao executar fluxo "${trigger.flow.name}": ${flowErr.message}`,
+                    data: JSON.stringify({ eventType, flowId: trigger.flow.id, error: flowErr.message }),
+                    conversationId,
+                    leadId,
+                },
+            }).catch(() => { });
+        }
     }
 }
 async function executeFlow(flowId, conversationId, leadId) {
@@ -91,11 +116,14 @@ async function executeNode(executionId, nodeId, flow, conversationId, leadId, de
                             direction: 'OUTBOUND',
                             type: 'TEXT',
                             content: config.text,
+                            senderType: 'FLOW',
                             fromFlow: true,
                             flowNodeId: nodeId,
                         },
                     });
-                    await (0, zapiService_1.sendTextMessage)(conversation.contact.phone, config.text, conversation.storeId).catch((e) => console.error('Flow Z-API error:', e.message));
+                    // contact.phone é normalizado (sem DDI); Z-API precisa do "55" prefixado
+                    const zapiPhone = `55${conversation.contact.phone}`;
+                    await (0, zapiService_1.sendTextMessage)(zapiPhone, config.text, conversation.storeId).catch((e) => console.error('Flow Z-API error:', e.message));
                     (0, socket_1.emitNewMessage)(conversationId, {
                         id: msg.id,
                         conversationId,
@@ -132,11 +160,14 @@ async function executeNode(executionId, nodeId, flow, conversationId, leadId, de
                             direction: 'OUTBOUND',
                             type: 'TEXT',
                             content: aiReply,
+                            senderType: 'AI',
                             fromFlow: true,
                             flowNodeId: nodeId,
                         },
                     });
-                    await (0, zapiService_1.sendTextMessage)(conversation.contact.phone, aiReply, conversation.storeId).catch((e) => console.error('Flow Z-API error:', e.message));
+                    // contact.phone é normalizado (sem DDI); Z-API precisa do "55" prefixado
+                    const zapiPhone = `55${conversation.contact.phone}`;
+                    await (0, zapiService_1.sendTextMessage)(zapiPhone, aiReply, conversation.storeId).catch((e) => console.error('Flow Z-API error:', e.message));
                     (0, socket_1.emitNewMessage)(conversationId, {
                         id: msg.id,
                         conversationId,

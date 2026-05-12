@@ -1,7 +1,14 @@
+export interface LeadContext {
+    name?: string | null;
+    region?: string | null;
+    interest?: string | null;
+    temperature?: string | null;
+    formaPagamento?: string | null;
+}
 export declare function generateAiResponse(conversationId: string, messages: {
     role: 'user' | 'assistant';
     content: string;
-}[], storeId?: string | null): Promise<string>;
+}[], storeId?: string | null, leadContext?: LeadContext): Promise<string>;
 export interface ConversationAnalysis {
     tipo: 'venda' | 'suporte' | 'orcamento' | 'reclamacao' | 'informacao' | 'outro';
     temperatura: 'FRIO' | 'MORNO' | 'QUENTE' | 'URGENTE';

@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { classifyIntentAndTemperature, generateAiResponse } from './aiService';
+import { classifyIntentAndTemperature, generateAiResponse, analyzeConversation, LeadContext } from './aiService';
 import { sendTextMessage } from './zapiService';
 import { emitNewMessage, emitConversationUpdate, emitNewConversation } from '../socket';
 import { triggerFlowsByEvent } from './flowEngine';
@@ -25,19 +25,23 @@ const L = {
   LEAD:    '[LEAD]',
   CONV:    '[CONVERSA]',
   // IA
-  AI:      '[IA]',
+  AI:      '[IA_PROCESSING_STARTED]',
+  AI_CTX:  '[IA_CONTEXT_BUILT]',
   AI_ON:   '[IA_AUTO_ENABLED_ON_NEW_CONVERSATION]',
-  AI_GEN:  '[IA_RESPONSE_GENERATED]',    // emitido no aiService; aqui apenas referência
+  AI_GEN:  '[IA_RESPONSE_GENERATED]',
   AI_SND:  '[IA_RESPONSE_SENT]',
-  AI_SKP:  '[IA_SKIPPED]',
+  AI_SKP:  '[IA_SKIPPED_REASON]',
   AI_ERR:  '[IA_ERROR]',
-  // Handoff
+  // Lead
+  TEMP:    '[LEAD_TEMPERATURE_UPDATED]',
   HOT:     '[LEAD_HOT_DETECTED]',
+  QUAL:    '[LEAD_QUALIFIED]',
+  // Handoff
   HOFF:    '[HANDOFF_STARTED]',
   SELL:    '[SELLER_NOTIFIED]',
   // Demais
   ZAPI:    '[ZAPI]',
-  FLOW:    '[FLOW]',
+  FLOW:    '[FLOW_EVENT_TRIGGERED]',
 };
 
 // ─── Tipos de callback Z-API que NÃO são mensagens inbound ───────────────────
@@ -319,6 +323,10 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     const classification = await classifyIntentAndTemperature(content);
     const prevTemperature = lead.temperature;
 
+    const tempEscalated =
+      (classification.temperature === 'QUENTE' || classification.temperature === 'URGENTE') &&
+      prevTemperature !== classification.temperature;
+
     await prisma.lead.update({
       where: { id: lead.id },
       data:  {
@@ -327,16 +335,42 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       },
     });
 
+    // Log de atualização de temperatura quando muda
+    if (prevTemperature !== classification.temperature) {
+      console.log(`${L.TEMP} | lead: ${lead.id} | ${prevTemperature} → ${classification.temperature}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'LEAD_TEMPERATURE_UPDATED',
+          description:    `Temperatura: ${prevTemperature} → ${classification.temperature}`,
+          data:           JSON.stringify({ prev: prevTemperature, current: classification.temperature }),
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
+
+      // Disparar evento TEMPERATURE_CHANGED nos fluxos
+      triggerFlowsByEvent('TEMPERATURE_CHANGED', classification.temperature, conversation.id, lead.id)
+        .catch((e: any) => console.error(`[FLOW] TEMPERATURE_CHANGED error:`, e.message));
+    }
+
     // ── PASSO 10 — Trigger LEAD_HOT + handoff se temperatura escalou ─────────
-    if (
-      (classification.temperature === 'QUENTE' || classification.temperature === 'URGENTE') &&
-      prevTemperature !== classification.temperature
-    ) {
+    if (tempEscalated) {
       console.log(`${L.HOT} | lead: ${lead.id} | temp: ${prevTemperature} → ${classification.temperature} | conv: ${conversation.id}`);
+
+      // Log LEAD_HOT_DETECTED no banco
+      await prisma.automationLog.create({
+        data: {
+          type:           'LEAD_HOT_DETECTED',
+          description:    `Lead ${classification.temperature}: acionando handoff | conv: ${conversation.id}`,
+          data:           JSON.stringify({ temperature: classification.temperature, intent: classification.intent }),
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
 
       // Trigger de fluxo
       triggerFlowsByEvent('LEAD_HOT', classification.temperature, conversation.id, lead.id)
-        .catch((e: any) => console.error(`${L.FLOW} | LEAD_HOT error:`, e.message));
+        .catch((e: any) => console.error(`[FLOW] LEAD_HOT error:`, e.message));
 
       console.log(`${L.HOFF} | conv: ${conversation.id} | iniciando handoff IA → vendedor`);
 
@@ -368,6 +402,10 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     triggerFlowsByEvent('KEYWORD', content, conversation.id, lead.id)
       .catch((e: any) => console.error(`${L.FLOW} | KEYWORD error:`, e.message));
 
+    // Evento MESSAGE_RECEIVED para todos os fluxos que escutam mensagens
+    triggerFlowsByEvent('MESSAGE_RECEIVED', content, conversation.id, lead.id)
+      .catch((e: any) => console.error(`${L.FLOW} | MESSAGE_RECEIVED error:`, e.message));
+
     if (isNewLead) {
       triggerFlowsByEvent('FIRST_MESSAGE', content, conversation.id, lead.id)
         .catch((e: any) => console.error(`${L.FLOW} | FIRST_MESSAGE error:`, e.message));
@@ -375,38 +413,82 @@ export async function processZapiWebhook(payload: any): Promise<void> {
         .catch((e: any) => console.error(`${L.FLOW} | LEAD_CREATED error:`, e.message));
     }
 
+    if (isNewConversation) {
+      triggerFlowsByEvent('CONVERSATION_CREATED', content, conversation.id, lead.id)
+        .catch((e: any) => console.error(`${L.FLOW} | CONVERSATION_CREATED error:`, e.message));
+    }
+
     // ── PASSO 13 — Verificar se IA deve responder ─────────────────────────────
 
     // Guarda-chuva: se esta mensagem acabou de elevar a temperatura para QUENTE/URGENTE,
-    // o handoff foi disparado (fire-and-forget). Bloquear aqui antes de chamar a IA para
-    // evitar race condition — sem depender do timing da atualização assíncrona do banco.
-    const tempJustBecameHot =
-      (classification.temperature === 'QUENTE' || classification.temperature === 'URGENTE') &&
-      prevTemperature !== classification.temperature;
-
-    if (tempJustBecameHot) {
-      console.log(`${L.AI_SKP} | handoff iniciado para lead ${classification.temperature} | conv: ${conversation.id}`);
+    // o handoff foi disparado. Bloquear aqui para evitar race condition.
+    if (tempEscalated) {
+      const skipReason = `handoff iniciado — lead ${classification.temperature}`;
+      console.log(`${L.AI_SKP} | ${skipReason} | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'IA_SKIPPED_REASON',
+          description:    skipReason,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
       return;
     }
 
     const freshConv = await prisma.conversation.findUnique({ where: { id: conversation.id } });
 
     if (!freshConv?.aiEnabled) {
-      console.log(`${L.AI_SKP} | aiEnabled=false | conv: ${conversation.id}`);
+      const skipReason = 'aiEnabled=false';
+      console.log(`${L.AI_SKP} | ${skipReason} | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'IA_SKIPPED_REASON',
+          description:    skipReason,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
       return;
     }
     if (AI_BLOCKED_MODES.includes(freshConv.mode)) {
-      console.log(`${L.AI_SKP} | modo "${freshConv.mode}" | conv: ${conversation.id}`);
+      const skipReason = `modo bloqueado: ${freshConv.mode}`;
+      console.log(`${L.AI_SKP} | ${skipReason} | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'IA_SKIPPED_REASON',
+          description:    skipReason,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
       return;
     }
     if (AI_BLOCKED_STATUSES.includes(freshConv.status)) {
-      console.log(`${L.AI_SKP} | status "${freshConv.status}" | conv: ${conversation.id}`);
+      const skipReason = `status bloqueado: ${freshConv.status}`;
+      console.log(`${L.AI_SKP} | ${skipReason} | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'IA_SKIPPED_REASON',
+          description:    skipReason,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
       return;
     }
 
-    console.log(`${L.AI} | chamando | conv: ${conversation.id} | modo: ${freshConv.mode}`);
+    console.log(`${L.AI} | conv: ${conversation.id} | modo: ${freshConv.mode}`);
+    await prisma.automationLog.create({
+      data: {
+        type:           'IA_PROCESSING_STARTED',
+        description:    `IA iniciando resposta | modo: ${freshConv.mode} | temp: ${classification.temperature}`,
+        conversationId: conversation.id,
+        leadId:         lead.id,
+      },
+    }).catch(() => {});
 
-    // ── PASSO 14 — Montar histórico e chamar IA ───────────────────────────────
+    // ── PASSO 14 — Montar histórico e contexto do lead para IA ───────────────
     const recentMessages = await prisma.message.findMany({
       where:   { conversationId: conversation.id },
       orderBy: { createdAt: 'asc' },
@@ -418,15 +500,35 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       content: m.content,
     }));
 
+    // Contexto do lead: dados já coletados para evitar perguntas repetidas
+    const freshLead = await prisma.lead.findUnique({ where: { id: lead.id } });
+    const leadContext: LeadContext = {
+      name:           freshLead?.name !== normalizedPhone ? freshLead?.name : undefined,
+      region:         freshLead?.region   ?? undefined,
+      interest:       freshLead?.interest ?? undefined,
+      temperature:    freshLead?.temperature ?? undefined,
+    };
+
+    console.log(`${L.AI_CTX} | lead ctx: ${JSON.stringify(leadContext)} | msgs: ${chatHistory.length} | conv: ${conversation.id}`);
+    await prisma.automationLog.create({
+      data: {
+        type:           'IA_CONTEXT_BUILT',
+        description:    `Contexto montado: ${chatHistory.length} mensagens | lead conhecido: ${!!leadContext.region}`,
+        data:           JSON.stringify({ leadContext, messageCount: chatHistory.length }),
+        conversationId: conversation.id,
+        leadId:         lead.id,
+      },
+    }).catch(() => {});
+
     let aiReply: string;
     try {
-      aiReply = await generateAiResponse(conversation.id, chatHistory, conversation.storeId);
+      aiReply = await generateAiResponse(conversation.id, chatHistory, conversation.storeId, leadContext);
     } catch (aiErr: any) {
       console.error(`${L.AI_ERR} | ${aiErr.message} | conv: ${conversation.id}`);
       await prisma.automationLog.create({
         data: {
-          type:           'AI_ERROR',
-          description:    `${L.AI_ERR}: ${aiErr.message}`,
+          type:           'IA_ERROR',
+          description:    `Erro ao gerar resposta: ${aiErr.message}`,
           conversationId: conversation.id,
           leadId:         lead.id,
         },
@@ -439,8 +541,15 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       return;
     }
 
-    // IA_RESPONSE_GENERATED já logado dentro de aiService.ts
-    console.log(`${L.AI} | resposta: "${aiReply.substring(0, 100)}"`);
+    console.log(`${L.AI_GEN} | conv: ${conversation.id} | "${aiReply.substring(0, 100)}"`);
+    await prisma.automationLog.create({
+      data: {
+        type:           'IA_RESPONSE_GENERATED',
+        description:    `IA gerou resposta (${aiReply.length} chars)`,
+        conversationId: conversation.id,
+        leadId:         lead.id,
+      },
+    }).catch(() => {});
 
     // ── PASSO 15 — Salvar mensagem OUTBOUND da IA ─────────────────────────────
     const aiMessage = await prisma.message.create({
@@ -454,11 +563,21 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     });
 
     // ── PASSO 16 — Enviar via Z-API (usa rawPhone com DDI "55") ───────────────
+    let zapiSent = false;
     try {
       await sendTextMessage(rawPhone, aiReply, conversation.storeId);
+      zapiSent = true;
       console.log(`${L.AI_SND} | via Z-API | para: ${rawPhone} | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'IA_RESPONSE_SENT',
+          description:    `Resposta enviada via Z-API | msg: ${aiMessage.id}`,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
     } catch (zapErr: any) {
-      console.error(`${L.ZAPI} | falha ao enviar IA | para: ${rawPhone} |`, zapErr.message);
+      console.error(`[ZAPI] | falha ao enviar IA | para: ${rawPhone} |`, zapErr.message);
       // Não bloqueia — mensagem já foi salva no banco
     }
 
@@ -473,19 +592,86 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       createdAt:      aiMessage.createdAt.toISOString(),
     });
 
-    await prisma.automationLog.create({
-      data: {
-        type:           'AI_RESPONSE',
-        description:    `IA respondeu | conv: ${conversation.id}`,
-        conversationId: conversation.id,
-        leadId:         lead.id,
-      },
-    });
+    // ── PASSO 18 — Extração assíncrona de dados do lead em background ─────────
+    // A cada 4 mensagens inbound ou quando a conversa é nova, extrai cidade/interesse/pagamento
+    const inboundCount = recentMessages.filter(m => m.direction === 'INBOUND').length;
+    if (inboundCount > 0 && (inboundCount <= 2 || inboundCount % 4 === 0)) {
+      extractAndSaveLeadData(conversation.id, conversation.storeId, lead.id, recentMessages)
+        .catch((e: any) => console.error('[LEAD_EXTRACT_BG] Erro:', e.message));
+    }
 
-    console.log(`${L.AI} | fluxo completo | conv: ${conversation.id} | outbound: ${aiMessage.id}`);
+    console.log(`[IA] | fluxo completo | conv: ${conversation.id} | outbound: ${aiMessage.id} | Z-API: ${zapiSent}`);
 
   } catch (err: any) {
     console.error(`${L.ERR} | ${err.message}`, '\n', err.stack);
     throw err;
+  }
+}
+
+// ─── Extração assíncrona de dados de qualificação do lead ────────────────────
+// Chamada em background a cada N mensagens para manter CRM atualizado.
+async function extractAndSaveLeadData(
+  conversationId: string,
+  storeId: string | null | undefined,
+  leadId: string,
+  messages: { direction: string; content: string; senderType: string }[],
+): Promise<void> {
+  try {
+    const analysis = await analyzeConversation(messages, storeId);
+
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) return;
+
+    const leadUpdate: Record<string, string> = {};
+
+    // Nome: atualizar se ainda é o telefone ou se a IA identificou nome real
+    if (
+      analysis.nomeCliente &&
+      analysis.nomeCliente.length > 2 &&
+      (lead.name === lead.phone || !lead.name)
+    ) {
+      leadUpdate.name = analysis.nomeCliente;
+    }
+
+    // Região: preencher apenas se ainda vazia
+    const regiaoExtraida = [analysis.cidade, analysis.bairro, analysis.regiao]
+      .filter(Boolean)
+      .join(' / ');
+    if (regiaoExtraida && !lead.region) {
+      leadUpdate.region = regiaoExtraida;
+    }
+
+    // Interesse no produto
+    if (analysis.modeloInteresse && !lead.interest) {
+      leadUpdate.interest = analysis.modeloInteresse;
+    }
+
+    if (Object.keys(leadUpdate).length > 0) {
+      await prisma.lead.update({ where: { id: leadId }, data: leadUpdate });
+      console.log(`${L.QUAL} | lead: ${leadId} | dados: ${JSON.stringify(leadUpdate)}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'LEAD_QUALIFIED',
+          description:    `Dados extraídos pela IA: ${JSON.stringify(leadUpdate)}`,
+          data:           JSON.stringify({ extracted: leadUpdate, analysis }),
+          conversationId,
+          leadId,
+        },
+      }).catch(() => {});
+    }
+
+    // Salvar análise completa para o Inbox
+    await prisma.automationLog.create({
+      data: {
+        type:           'AI_ANALYSIS',
+        description:    `Análise automática | tipo: ${analysis.tipo} | temp: ${analysis.temperatura}`,
+        data:           JSON.stringify(analysis),
+        conversationId,
+        leadId,
+      },
+    }).catch(() => {});
+
+  } catch (e: any) {
+    console.error('[LEAD_EXTRACT_BG]', e.message);
   }
 }

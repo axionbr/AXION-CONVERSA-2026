@@ -180,6 +180,17 @@ async function initiateHandoff(conversationId, lead, aiSummary) {
         aiEnabled: false,
         status: 'EM_ATENDIMENTO',
     });
+    // Log obrigatório de início do handoff
+    await prisma.automationLog.create({
+        data: {
+            type: 'HANDOFF_STARTED',
+            description: `Handoff iniciado | temperatura: ${lead.temperature} | região: ${lead.region ?? 'não informada'}`,
+            data: JSON.stringify({ leadId: lead.id, temperature: lead.temperature, storeId: lead.storeId }),
+            conversationId,
+            leadId: lead.id,
+        },
+    }).catch(() => { });
+    console.log(`[HANDOFF_STARTED] | conv: ${conversationId} | lead: ${lead.id} | temp: ${lead.temperature}`);
     // 2. Extrair região da conversa
     const msgs = await prisma.message.findMany({
         where: { conversationId, direction: 'INBOUND' },
