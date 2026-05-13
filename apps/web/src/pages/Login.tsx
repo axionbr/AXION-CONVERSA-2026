@@ -8,8 +8,8 @@ import { useTheme } from '../context/ThemeContext';
 import DeveloperSignature from '../components/DeveloperSignature';
 
 export default function Login() {
-  const [email, setEmail]       = useState('admin@axion.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail]       = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
   const { setAuth }             = useAuthStore();
@@ -141,13 +141,15 @@ export default function Login() {
             </button>
           </form>
 
-          {/* Credenciais demo */}
-          <div className="mt-5 p-3 bg-muted rounded-lg border border-border">
-            <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
-              <strong className="text-foreground">Demo:</strong>{' '}
-              admin@axion.com / admin123
-            </p>
-          </div>
+          {/* Credenciais demo — visível apenas em desenvolvimento */}
+          {import.meta.env.DEV && (
+            <div className="mt-5 p-3 bg-muted rounded-lg border border-border">
+              <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
+                <strong className="text-foreground">Demo:</strong>{' '}
+                admin@axion.com / admin123
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Assinatura Axion */}

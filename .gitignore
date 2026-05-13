@@ -5,3 +5,9 @@ node_modules
 dist
 build
 .DS_Store
+
+# Banco SQLite — nunca versionar (pode conter dados reais de clientes)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
