@@ -1,11 +1,11 @@
 #!/bin/bash
 # ─── AXION CONVERSA 2026 — Deploy VPS ────────────────────────────────────────
 # Servidor: 187.127.21.208
-# Caminho:  /var/www/axion-crm
+# Caminho:  /var/www/crm-tecle  (substitui versão antiga)
 # PM2:      axion-crm
 
 set -e
-APP_DIR="/var/www/axion-crm"
+APP_DIR="/var/www/crm-tecle"
 PM2_NAME="axion-crm"
 
 echo "──────────────────────────────────────────"
