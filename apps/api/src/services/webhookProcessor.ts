@@ -93,6 +93,32 @@ function extractPayload(payload: any): ExtractedPayload | null {
     return null;
   }
 
+  // ── Localização compartilhada pelo cliente via WhatsApp ──────────────────────
+  // Z-API envia: { location: { latitude, longitude, name, address } }
+  if (payload.location && (payload.location.latitude || payload.location.longitude)) {
+    const loc      = payload.location;
+    const locName  = loc.name || loc.address || `${loc.latitude},${loc.longitude}`;
+    const locText  = `📍 Localização: ${locName}`;
+
+    const rawPhone        = rawPhoneStr.replace(/\D/g, '');
+    const normalizedPhone = rawPhone.replace(/^55/, '');
+
+    if (normalizedPhone.length < 10) {
+      console.log(`${L.OUT} | localização | telefone inválido | ignorado`);
+      return null;
+    }
+
+    return {
+      normalizedPhone,
+      rawPhone,
+      content: locText,
+      messageId:  payload.messageId || payload.id,
+      senderName: payload.senderName || payload.pushName || normalizedPhone,
+      // campo extra para identificar como localização e atualizar lead.region
+      ...(loc.name || loc.address ? { _locationRegion: loc.name || loc.address } : {}),
+    } as any;
+  }
+
   // Extrai conteúdo — tenta todas as variações conhecidas do payload Z-API
   const content: string = (
     payload.text?.message              ||
@@ -136,6 +162,7 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     if (!extracted) return; // razão já logada dentro de extractPayload
 
     const { normalizedPhone, rawPhone, content, messageId, senderName } = extracted;
+    const locationRegion: string | undefined = (extracted as any)._locationRegion;
 
     console.log(`${L.RCV} | de: ${normalizedPhone} | msgId: ${messageId ?? 'sem-id'} | "${content.substring(0, 80)}"`);
 
@@ -317,6 +344,15 @@ export async function processZapiWebhook(payload: any): Promise<void> {
         lastMessageAt: new Date().toISOString(),
         unreadCount:   (conversation.unreadCount ?? 0) + 1,
       });
+    }
+
+    // ── PASSO 8.5 — Geolocalização: se payload tinha location, atualiza lead.region ──
+    if (locationRegion && !lead.region) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data:  { region: locationRegion },
+      }).catch(() => {});
+      console.log(`[GEO_LOCATION] | lead: ${lead.id} | região atualizada: ${locationRegion}`);
     }
 
     // ── PASSO 9 — Classificação de intenção (local, nunca falha) ──────────────

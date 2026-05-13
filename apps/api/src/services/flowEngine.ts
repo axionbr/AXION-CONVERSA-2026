@@ -643,8 +643,25 @@ async function executeNode(
 
       // ── Delay ─────────────────────────────────────────────────────────────────
       case 'DELAY': {
-        // V1: registra mas não trava a execução
-        output    = { delay: config.delay, unit: config.unit };
+        const amount = Number(config.delay ?? 0);
+        const unitMs = config.unit === 'hours' ? 3_600_000
+                     : config.unit === 'days'  ? 86_400_000
+                     : 60_000; // minutes (default)
+        const delayMs = amount * unitMs;
+
+        if (!testMode && delayMs > 0) {
+          if (delayMs <= 300_000) {
+            // Até 5 minutos: aguarda de verdade
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            output = { delay: amount, unit: config.unit, waited: true };
+          } else {
+            // Mais de 5 min: registra e avança (agendamento real exige job queue)
+            console.log(`[FLOW_DELAY] delay de ${amount}${config.unit} maior que 5min — avançando sem esperar`);
+            output = { delay: amount, unit: config.unit, waited: false, skipped: 'too_long' };
+          }
+        } else {
+          output = { delay: amount, unit: config.unit, waited: false, testMode };
+        }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }

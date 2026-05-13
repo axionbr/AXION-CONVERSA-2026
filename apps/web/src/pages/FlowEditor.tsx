@@ -693,9 +693,14 @@ function FlowEditorCanvas() {
       id: e.id,
       source: e.sourceNodeId,
       target: e.targetNodeId,
-      label: e.label,
+      label: e.label || undefined,
       markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' },
       style: { stroke: '#3b82f6', strokeWidth: 2 },
+      ...(e.label ? {
+        labelStyle:   { fill: '#e2e8f0', fontSize: 11, fontWeight: 600 },
+        labelBgStyle: { fill: '#1e293b', rx: 4, ry: 4 },
+        labelBgPadding: [4, 2] as [number, number],
+      } : {}),
     })));
   }, [flow]);
 
@@ -720,15 +725,31 @@ function FlowEditorCanvas() {
   // ── edge connect ───────────────────────────────────────────────────────────
 
   const onConnect = useCallback(
-    (params: Connection) =>
+    (params: Connection) => {
+      // Se a origem for um nó MENU, pede o valor da opção para rotear corretamente
+      const sourceNode = nodes.find(n => n.id === params.source);
+      let label: string | undefined;
+      if (sourceNode?.data.type === 'MENU') {
+        const input = window.prompt(
+          'Qual o valor desta opção? (ex: 1, 2, comprar, suporte)\nDeixe vazio para rota padrão/fallback.'
+        );
+        if (input === null) return; // usuário cancelou
+        label = input.trim() || undefined;
+      }
+
       setEdges(es =>
         addEdge({
           ...params,
+          label,
           markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' },
           style: { stroke: '#3b82f6', strokeWidth: 2 },
+          labelStyle: { fill: '#e2e8f0', fontSize: 11, fontWeight: 600 },
+          labelBgStyle: { fill: '#1e293b', rx: 4, ry: 4 },
+          labelBgPadding: [4, 2] as [number, number],
         }, es)
-      ),
-    [setEdges],
+      );
+    },
+    [setEdges, nodes],
   );
 
   // ── node helpers ───────────────────────────────────────────────────────────
