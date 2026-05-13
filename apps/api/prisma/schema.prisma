@@ -357,7 +357,7 @@ model FlowExecution {
   finishedAt     DateTime?
   error          String?
 
-  flow         Flow               @relation(fields: [flowId], references: [id])
+  flow         Flow               @relation(fields: [flowId], references: [id], onDelete: Cascade)
   conversation Conversation?      @relation(fields: [conversationId], references: [id])
   lead         Lead?              @relation(fields: [leadId], references: [id])
   user         User?              @relation(fields: [userId], references: [id])

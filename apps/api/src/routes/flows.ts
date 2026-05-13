@@ -85,6 +85,19 @@ router.put('/:id', async (req, res, next) => {
 
     await prisma.$transaction(async (tx) => {
       if (nodes !== undefined) {
+        // FlowExecutionStep referencia FlowNode sem cascade — precisamos limpar os
+        // steps das execuções deste fluxo antes de deletar os nodes para evitar
+        // "Foreign key constraint violated"
+        const executions = await tx.flowExecution.findMany({
+          where:  { flowId: req.params.id },
+          select: { id: true },
+        });
+        if (executions.length > 0) {
+          await tx.flowExecutionStep.deleteMany({
+            where: { executionId: { in: executions.map((e) => e.id) } },
+          });
+        }
+
         await tx.flowNode.deleteMany({ where: { flowId: req.params.id } });
         if (nodes.length > 0) {
           await tx.flowNode.createMany({
@@ -230,7 +243,44 @@ router.post('/:id/duplicate', async (req: AuthRequest, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    await prisma.flow.delete({ where: { id: req.params.id } });
+    const flowId = req.params.id;
+
+    // Verifica se o fluxo existe antes de tentar deletar
+    const flow = await prisma.flow.findUnique({ where: { id: flowId } });
+    if (!flow) return res.status(404).json({ error: 'Fluxo não encontrado' });
+
+    // Deleta em transação na ordem correta para satisfazer as FK constraints:
+    // 1. FlowExecutionStep  (depende de FlowExecution e FlowNode)
+    // 2. FlowExecution      (depende de Flow)
+    // 3. FlowTrigger        (cascade existe mas deletamos explicitamente por segurança)
+    // 4. FlowEdge           (cascade existe)
+    // 5. FlowNode           (cascade existe)
+    // 6. Flow               (raiz)
+    await prisma.$transaction(async (tx) => {
+      // Busca IDs de execuções deste fluxo para deletar seus steps
+      const executions = await tx.flowExecution.findMany({
+        where:  { flowId },
+        select: { id: true },
+      });
+      const executionIds = executions.map((e) => e.id);
+
+      if (executionIds.length > 0) {
+        await tx.flowExecutionStep.deleteMany({
+          where: { executionId: { in: executionIds } },
+        });
+        await tx.flowExecution.deleteMany({ where: { flowId } });
+      }
+
+      // FlowTrigger, FlowEdge, FlowNode têm onDelete: Cascade, mas
+      // deletamos explicitamente para garantir (SQLite às vezes ignora cascades
+      // quando pragma foreign_keys está off)
+      await tx.flowTrigger.deleteMany({ where: { flowId } });
+      await tx.flowEdge.deleteMany({ where: { flowId } });
+      await tx.flowNode.deleteMany({ where: { flowId } });
+
+      await tx.flow.delete({ where: { id: flowId } });
+    });
+
     res.json({ success: true });
   } catch (err) { next(err); }
 });
