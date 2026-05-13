@@ -12,11 +12,7 @@ export const CONVERSATIONAL_EVENTS = new Set([
   'FIRST_MESSAGE',
 ]);
 
-/**
- * Dispara fluxos cadastrados para o evento dado.
- * Retorna `true` se ao menos um fluxo foi efetivamente executado.
- * Usado pelo webhookProcessor para decidir se a IA deve fazer fallback.
- */
+// ─── Trigger + execute (retorna true se ao menos um fluxo executou) ───────────
 export async function triggerFlowsByEvent(
   eventType: string,
   value: string,
@@ -42,7 +38,6 @@ export async function triggerFlowsByEvent(
     try {
       await executeFlow(trigger.flow.id, conversationId, leadId);
       anyExecuted = true;
-
       await prisma.automationLog.create({
         data: {
           type:           'FLOW_EXECUTED',
@@ -52,15 +47,14 @@ export async function triggerFlowsByEvent(
           leadId,
         },
       }).catch(() => {});
-
       console.log(`[FLOW_EXECUTED] | fluxo: "${trigger.flow.name}" | evento: ${eventType} | conv: ${conversationId}`);
     } catch (flowErr: any) {
       console.error(`[FLOW_EVENT_FAILED] | evento: ${eventType} | fluxo: ${trigger.flow.id} |`, flowErr.message);
       await prisma.automationLog.create({
         data: {
-          type:           'FLOW_EVENT_FAILED',
-          description:    `Falha ao executar fluxo "${trigger.flow.name}": ${flowErr.message}`,
-          data:           JSON.stringify({ eventType, flowId: trigger.flow.id, error: flowErr.message }),
+          type:        'FLOW_EVENT_FAILED',
+          description: `Falha ao executar fluxo "${trigger.flow.name}": ${flowErr.message}`,
+          data:        JSON.stringify({ eventType, flowId: trigger.flow.id, error: flowErr.message }),
           conversationId,
           leadId,
         },
@@ -71,37 +65,153 @@ export async function triggerFlowsByEvent(
   return anyExecuted;
 }
 
+// ─── Inicia execução de um fluxo ─────────────────────────────────────────────
 export async function executeFlow(
   flowId: string,
   conversationId: string,
   leadId?: string,
-) {
+  testMode = false,
+): Promise<string | null> {
   const flow = await prisma.flow.findUnique({
     where:   { id: flowId },
     include: { nodes: true, edges: true },
   });
 
-  if (!flow || !flow.active) return;
+  if (!flow || !flow.active) return null;
 
   const startNode = flow.nodes.find(n => n.type === 'START');
-  if (!startNode) return;
+  if (!startNode) return null;
 
   const execution = await prisma.flowExecution.create({
-    data: { flowId, conversationId, leadId, status: 'RUNNING', currentNodeId: startNode.id },
+    data: {
+      flowId,
+      conversationId,
+      leadId,
+      status:        'RUNNING',
+      currentNodeId: startNode.id,
+      testMode,
+    },
   });
 
   try {
-    await executeNode(execution.id, startNode.id, flow, conversationId, leadId);
-    await prisma.flowExecution.update({
-      where: { id: execution.id },
-      data:  { status: 'COMPLETED', finishedAt: new Date() },
-    });
+    await executeNode(execution.id, startNode.id, flow, conversationId, leadId, 0, testMode);
+
+    // Só atualiza para COMPLETED se ainda não estiver WAITING_RESPONSE
+    const updated = await prisma.flowExecution.findUnique({ where: { id: execution.id } });
+    if (updated?.status === 'RUNNING') {
+      await prisma.flowExecution.update({
+        where: { id: execution.id },
+        data:  { status: 'COMPLETED', finishedAt: new Date() },
+      });
+    }
   } catch (err: any) {
     await prisma.flowExecution.update({
       where: { id: execution.id },
       data:  { status: 'FAILED', error: err.message, finishedAt: new Date() },
-    });
+    }).catch(() => {});
   }
+
+  return execution.id;
+}
+
+// ─── Continua uma execução que estava aguardando resposta do cliente ──────────
+export async function continueExecutionWithResponse(
+  executionId: string,
+  userMessage: string,
+): Promise<void> {
+  const execution = await prisma.flowExecution.findUnique({
+    where:   { id: executionId },
+    include: { flow: { include: { nodes: true, edges: true } } },
+  });
+
+  if (!execution || execution.status !== 'WAITING_RESPONSE') return;
+  if (!execution.conversationId || !execution.currentNodeId) return;
+
+  const nextNodeId = getNextNode(execution.flow.edges, execution.currentNodeId);
+
+  await prisma.flowExecution.update({
+    where: { id: executionId },
+    data:  { status: 'RUNNING' },
+  });
+
+  if (!nextNodeId) {
+    await prisma.flowExecution.update({
+      where: { id: executionId },
+      data:  { status: 'COMPLETED', finishedAt: new Date() },
+    });
+    return;
+  }
+
+  try {
+    await executeNode(
+      executionId,
+      nextNodeId,
+      execution.flow,
+      execution.conversationId,
+      execution.leadId ?? undefined,
+      0,
+      execution.testMode ?? false,
+      userMessage,
+    );
+
+    const updated = await prisma.flowExecution.findUnique({ where: { id: executionId } });
+    if (updated?.status === 'RUNNING') {
+      await prisma.flowExecution.update({
+        where: { id: executionId },
+        data:  { status: 'COMPLETED', finishedAt: new Date() },
+      });
+    }
+  } catch (err: any) {
+    await prisma.flowExecution.update({
+      where: { id: executionId },
+      data:  { status: 'FAILED', error: err.message, finishedAt: new Date() },
+    }).catch(() => {});
+  }
+}
+
+// ─── Helper: envia mensagem outbound no fluxo ─────────────────────────────────
+async function sendFlowMessage(
+  conversationId: string,
+  nodeId: string,
+  text: string,
+  senderType: 'FLOW' | 'AI',
+  testMode: boolean,
+): Promise<void> {
+  const conversation = await prisma.conversation.findUnique({
+    where:   { id: conversationId },
+    include: { contact: true },
+  });
+  if (!conversation || !text.trim()) return;
+
+  const msg = await prisma.message.create({
+    data: {
+      conversationId,
+      direction:  'OUTBOUND',
+      type:       'TEXT',
+      content:    text.trim(),
+      senderType,
+      fromFlow:   true,
+      flowNodeId: nodeId,
+    },
+  });
+
+  if (!testMode) {
+    const zapiPhone = `55${conversation.contact.phone}`;
+    await sendTextMessage(zapiPhone, text.trim(), conversation.storeId).catch(
+      (e: any) => console.error(`[FLOW_MSG] Z-API error:`, e.message),
+    );
+  }
+
+  emitNewMessage(conversationId, {
+    id:             msg.id,
+    conversationId,
+    direction:      'OUTBOUND',
+    type:           'TEXT',
+    content:        text.trim(),
+    senderType,
+    createdAt:      msg.createdAt.toISOString(),
+    fromFlow:       true,
+  });
 }
 
 // ─── Helper: chama um agente IA dentro do fluxo ───────────────────────────────
@@ -109,8 +219,21 @@ async function runAgentNode(
   agentType: AgentType,
   conversationId: string,
   nodeId: string,
-  leadId?: string,
+  leadId: string | undefined,
+  testMode: boolean,
 ): Promise<string> {
+  // Em testMode retorna resposta mockada para não gastar API
+  if (testMode) {
+    const mockReplies: Record<AgentType, string> = {
+      SDR:        '[Modo Teste] Boa tarde! Te ajudo sim. Você busca uma scooter elétrica para dia a dia, trabalho ou lazer?',
+      QUALIFIER:  '[Modo Teste] Qual cidade ou bairro você está? Assim posso indicar a unidade mais próxima.',
+      CONSULTANT: '[Modo Teste] Ótima escolha para mobilidade urbana! Temos opções com autonomia de até 80km por carga.',
+    };
+    const reply = mockReplies[agentType];
+    await sendFlowMessage(conversationId, nodeId, reply, 'AI', testMode);
+    return reply;
+  }
+
   const recentMessages = await prisma.message.findMany({
     where:   { conversationId },
     orderBy: { createdAt: 'asc' },
@@ -134,49 +257,14 @@ async function runAgentNode(
     temperature: lead?.temperature ?? undefined,
   };
 
-  const aiReply = await generateAiResponse(
-    conversationId,
-    chatHistory,
-    conversation?.storeId,
-    leadContext,
-    agentType,
-  );
-
-  if (aiReply && conversation) {
-    const msg = await prisma.message.create({
-      data: {
-        conversationId,
-        direction:  'OUTBOUND',
-        type:       'TEXT',
-        content:    aiReply,
-        senderType: 'AI',
-        fromFlow:   true,
-        flowNodeId: nodeId,
-      },
-    });
-
-    const zapiPhone = `55${conversation.contact.phone}`;
-    await sendTextMessage(zapiPhone, aiReply, conversation.storeId).catch(
-      (e: any) => console.error(`[FLOW_AGENT] Z-API error (${agentType}):`, e.message)
-    );
-
-    emitNewMessage(conversationId, {
-      id:             msg.id,
-      conversationId,
-      direction:      'OUTBOUND',
-      type:           'TEXT',
-      content:        aiReply,
-      senderType:     'AI',
-      createdAt:      msg.createdAt.toISOString(),
-      fromFlow:       true,
-    });
+  const aiReply = await generateAiResponse(conversationId, chatHistory, conversation?.storeId, leadContext, agentType);
+  if (aiReply) {
+    await sendFlowMessage(conversationId, nodeId, aiReply, 'AI', testMode);
   }
-
   return aiReply;
 }
 
 // ─── Executor de nó ───────────────────────────────────────────────────────────
-
 async function executeNode(
   executionId: string,
   nodeId: string,
@@ -184,8 +272,10 @@ async function executeNode(
   conversationId: string,
   leadId?: string,
   depth = 0,
+  testMode = false,
+  userInput?: string, // resposta do cliente para QUESTION anterior
 ): Promise<void> {
-  if (depth > 50) throw new Error('Flow loop detected');
+  if (depth > 50) throw new Error('Flow loop detected — mais de 50 nós percorridos');
 
   const node = flow.nodes.find((n: any) => n.id === nodeId);
   if (!node) return;
@@ -196,7 +286,12 @@ async function executeNode(
   });
 
   const step = await prisma.flowExecutionStep.create({
-    data: { executionId, nodeId, status: 'running', input: '{}' },
+    data: {
+      executionId,
+      nodeId,
+      status: 'running',
+      input:  userInput ? JSON.stringify({ userInput }) : '{}',
+    },
   });
 
   let nextNodeId: string | null = null;
@@ -209,82 +304,92 @@ async function executeNode(
 
     switch (node.type) {
 
+      // ── Controle ────────────────────────────────────────────────────────────
       case 'START': {
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
 
+      case 'END': {
+        nextNodeId = null;
+        output = { finished: true };
+        break;
+      }
+
+      // ── Mensagem fixa ────────────────────────────────────────────────────────
       case 'MESSAGE': {
-        const conversation = await prisma.conversation.findUnique({
-          where: { id: conversationId },
-          include: { contact: true },
-        });
-        if (conversation && config.text) {
-          const msg = await prisma.message.create({
-            data: {
-              conversationId,
-              direction:  'OUTBOUND',
-              type:       'TEXT',
-              content:    config.text,
-              senderType: 'FLOW',
-              fromFlow:   true,
-              flowNodeId: nodeId,
-            },
-          });
-          const zapiPhone = `55${conversation.contact.phone}`;
-          await sendTextMessage(zapiPhone, config.text, conversation.storeId).catch(
-            (e: any) => console.error('Flow MESSAGE Z-API error:', e.message)
-          );
-          emitNewMessage(conversationId, {
-            id: msg.id, conversationId, direction: 'OUTBOUND', type: 'TEXT',
-            content: config.text, createdAt: msg.createdAt.toISOString(), fromFlow: true,
-          });
+        const text = config.text || config.message || '';
+        if (text.trim()) {
+          await sendFlowMessage(conversationId, nodeId, text, 'FLOW', testMode);
+          output = { sent: text };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
-        output = { sent: config.text };
         break;
       }
 
-      // ── Resposta IA genérica (sem agente específico) ─────────────────────────
+      // ── Pergunta (aguarda resposta do cliente) ────────────────────────────────
+      case 'QUESTION': {
+        const question = config.text || config.question || '';
+        if (question.trim()) {
+          await sendFlowMessage(conversationId, nodeId, question, 'FLOW', testMode);
+        }
+
+        // Suspende execução aguardando resposta
+        await prisma.flowExecution.update({
+          where: { id: executionId },
+          data:  { status: 'WAITING_RESPONSE', currentNodeId: nodeId },
+        });
+
+        output = { waiting: true, question };
+        nextNodeId = null; // Interrompe aqui
+        break;
+      }
+
+      // ── Resposta IA genérica (auto-detect agente) ────────────────────────────
       case 'AI_RESPONSE': {
-        const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId } }) : null;
-        const inboundCount = (await prisma.message.count({
-          where: { conversationId, direction: 'INBOUND' },
-        }));
-        const agentType = determineAgentStage(
-          { region: lead?.region, interest: lead?.interest, temperature: lead?.temperature ?? 'FRIO' },
-          inboundCount,
-        );
-        const aiReply = await runAgentNode(agentType, conversationId, nodeId, leadId);
+        if (testMode) {
+          const mock = '[Modo Teste] Olá! Posso te ajudar com informações sobre nossas scooters elétricas.';
+          await sendFlowMessage(conversationId, nodeId, mock, 'AI', testMode);
+          output = { aiReply: mock, testMode: true };
+        } else {
+          const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId } }) : null;
+          const inboundCount = await prisma.message.count({
+            where: { conversationId, direction: 'INBOUND' },
+          });
+          const agentType = determineAgentStage(
+            { region: lead?.region, interest: lead?.interest, temperature: lead?.temperature ?? 'FRIO' },
+            inboundCount,
+          );
+          const aiReply = await runAgentNode(agentType, conversationId, nodeId, leadId, testMode);
+          output = { agentType, aiReply };
+        }
         nextNodeId = getNextNode(flow.edges, nodeId);
-        output = { agentType, aiReply };
         break;
       }
 
-      // ── Agentes comerciais específicos ───────────────────────────────────────
+      // ── Agentes comerciais ────────────────────────────────────────────────────
       case 'AGENT_SDR': {
-        const aiReply = await runAgentNode('SDR', conversationId, nodeId, leadId);
+        const aiReply = await runAgentNode('SDR', conversationId, nodeId, leadId, testMode);
         nextNodeId = getNextNode(flow.edges, nodeId);
         output = { agentType: 'SDR', aiReply };
         break;
       }
 
       case 'AGENT_QUALIFIER': {
-        const aiReply = await runAgentNode('QUALIFIER', conversationId, nodeId, leadId);
+        const aiReply = await runAgentNode('QUALIFIER', conversationId, nodeId, leadId, testMode);
         nextNodeId = getNextNode(flow.edges, nodeId);
         output = { agentType: 'QUALIFIER', aiReply };
         break;
       }
 
       case 'AGENT_CONSULTANT': {
-        const aiReply = await runAgentNode('CONSULTANT', conversationId, nodeId, leadId);
+        const aiReply = await runAgentNode('CONSULTANT', conversationId, nodeId, leadId, testMode);
         nextNodeId = getNextNode(flow.edges, nodeId);
         output = { agentType: 'CONSULTANT', aiReply };
         break;
       }
 
       case 'AGENT_HANDOFF': {
-        // Ativa o handoff comercial para o lead atual
         const conv = await prisma.conversation.findUnique({
           where:   { id: conversationId },
           include: { lead: true },
@@ -298,12 +403,13 @@ async function executeNode(
             storeId:     conv.storeId,
             region:      conv.lead.region,
           });
-          output = { handoffInitiated: true, leadId: conv.lead.id };
+          output = { handoffInitiated: true };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
 
+      // ── Tags e campos ─────────────────────────────────────────────────────────
       case 'SET_TAG': {
         if (leadId && config.tagName) {
           let tag = await prisma.tag.findFirst({ where: { name: config.tagName } });
@@ -313,6 +419,7 @@ async function executeNode(
             update: {},
             create: { leadId, tagId: tag.id },
           });
+          output = { tagApplied: config.tagName };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
@@ -322,6 +429,7 @@ async function executeNode(
         if (leadId && config.tagName) {
           const tag = await prisma.tag.findFirst({ where: { name: config.tagName } });
           if (tag) await prisma.leadTag.deleteMany({ where: { leadId, tagId: tag.id } });
+          output = { tagRemoved: config.tagName };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
@@ -337,11 +445,13 @@ async function executeNode(
               create: { customFieldId: field.id, leadId, value: config.value },
             });
           }
+          output = { fieldSet: config.fieldKey, value: config.value };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
 
+      // ── Atribuições ───────────────────────────────────────────────────────────
       case 'ASSIGN_USER': {
         if (config.userId) {
           await prisma.conversation.update({
@@ -351,6 +461,7 @@ async function executeNode(
           if (leadId) {
             await prisma.lead.update({ where: { id: leadId }, data: { assignedUserId: config.userId } });
           }
+          output = { assignedTo: config.userId };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
@@ -365,16 +476,19 @@ async function executeNode(
           if (leadId) {
             await prisma.lead.update({ where: { id: leadId }, data: { storeId: config.storeId } });
           }
+          output = { assignedStore: config.storeId };
         }
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
 
+      // ── IA on/off ─────────────────────────────────────────────────────────────
       case 'PAUSE_AI': {
         await prisma.conversation.update({
           where: { id: conversationId },
           data:  { aiEnabled: false, mode: 'HUMANO' },
         });
+        output = { aiPaused: true };
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
@@ -384,48 +498,69 @@ async function executeNode(
           where: { id: conversationId },
           data:  { aiEnabled: true, mode: 'IA_AUTOMATICA' },
         });
+        output = { aiResumed: true };
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
 
+      // ── Condição ──────────────────────────────────────────────────────────────
       case 'CONDITION': {
         const lead = leadId ? await prisma.lead.findUnique({ where: { id: leadId } }) : null;
-        const rules = config.rules || [];
+
+        // Suporte a regras múltiplas ou condição simples
+        const rules = config.rules?.length
+          ? config.rules
+          : [{ field: config.field, operator: config.operator, value: config.value, nextNodeId: null }];
+
         let matched = false;
         for (const rule of rules) {
-          if (evaluateCondition(rule, lead)) {
-            nextNodeId = rule.nextNodeId;
-            matched = true;
+          if (evaluateCondition(rule, lead, userInput)) {
+            nextNodeId = rule.nextNodeId || getNextNode(flow.edges, nodeId);
+            matched    = true;
+            output     = { conditionMet: true, rule };
             break;
           }
         }
-        if (!matched) nextNodeId = config.defaultNextNodeId || getNextNode(flow.edges, nodeId);
+
+        if (!matched) {
+          nextNodeId = config.defaultNextNodeId || getNextNode(flow.edges, nodeId);
+          output     = { conditionMet: false };
+        }
         break;
       }
 
+      // ── Delay ─────────────────────────────────────────────────────────────────
       case 'DELAY': {
-        output = { delay: config.delay, unit: config.unit };
+        // V1: registra mas não trava a execução
+        output    = { delay: config.delay, unit: config.unit };
         nextNodeId = getNextNode(flow.edges, nodeId);
         break;
       }
 
+      // ── Webhook externo ───────────────────────────────────────────────────────
       case 'WEBHOOK': {
-        const axios = require('axios');
-        const method = (config.method || 'POST').toLowerCase();
-        const resp = await axios[method](config.url, config.body || {}, {
-          headers: config.headers || {},
-        }).catch((e: any) => ({ data: { error: e.message } }));
-        output = { response: resp.data };
+        if (testMode) {
+          output    = { mocked: true, url: config.url };
+          nextNodeId = getNextNode(flow.edges, nodeId);
+          break;
+        }
+        try {
+          const axios  = require('axios');
+          const method = (config.method || 'POST').toLowerCase();
+          const resp   = await axios[method](config.url, config.body || {}, {
+            headers: config.headers || {},
+            timeout: 10_000,
+          });
+          output = { status: resp.status, response: resp.data };
+        } catch (e: any) {
+          output = { error: e.message };
+        }
         nextNodeId = getNextNode(flow.edges, nodeId);
-        break;
-      }
-
-      case 'END': {
-        nextNodeId = null;
         break;
       }
 
       default:
+        console.warn(`[FLOW] Tipo de nó desconhecido: "${node.type}" — avançando`);
         nextNodeId = getNextNode(flow.edges, nodeId);
     }
 
@@ -433,33 +568,54 @@ async function executeNode(
       where: { id: step.id },
       data:  { status: 'completed', output: JSON.stringify(output) },
     });
+
   } catch (err: any) {
     await prisma.flowExecutionStep.update({
       where: { id: step.id },
       data:  { status: 'failed', error: err.message },
-    });
+    }).catch(() => {});
     throw err;
   }
 
+  // Continua para o próximo nó (se não estiver aguardando resposta)
   if (nextNodeId) {
-    await executeNode(executionId, nextNodeId, flow, conversationId, leadId, depth + 1);
+    const exec = await prisma.flowExecution.findUnique({ where: { id: executionId } });
+    if (exec?.status === 'RUNNING') {
+      await executeNode(executionId, nextNodeId, flow, conversationId, leadId, depth + 1, testMode, undefined);
+    }
   }
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getNextNode(edges: any[], sourceNodeId: string): string | null {
   const edge = edges.find((e: any) => e.sourceNodeId === sourceNodeId);
   return edge?.targetNodeId || null;
 }
 
-function evaluateCondition(rule: any, lead: any): boolean {
-  if (!lead || !rule.field) return false;
-  const value = (lead as any)[rule.field];
+function evaluateCondition(rule: any, lead: any, userInput?: string): boolean {
+  // Campo especial: resposta do usuário à QUESTION anterior
+  const fieldValue = rule.field === 'userInput'
+    ? userInput ?? ''
+    : (lead as any)?.[rule.field] ?? '';
+
+  const val      = String(fieldValue ?? '').toLowerCase();
+  const expected = String(rule.value  ?? '').toLowerCase();
+
   switch (rule.operator) {
-    case 'equals':     return value === rule.value;
-    case 'not_equals': return value !== rule.value;
-    case 'contains':   return String(value).includes(rule.value);
-    case 'gt':         return Number(value) > Number(rule.value);
-    case 'lt':         return Number(value) < Number(rule.value);
-    default:           return false;
+    case 'equals':       return val === expected;
+    case 'not_equals':   return val !== expected;
+    case 'contains':     return val.includes(expected);
+    case 'not_contains': return !val.includes(expected);
+    case 'starts_with':  return val.startsWith(expected);
+    case 'ends_with':    return val.endsWith(expected);
+    case 'greater_than': return parseFloat(val) > parseFloat(expected);
+    case 'less_than':    return parseFloat(val) < parseFloat(expected);
+    case 'exists':       return val.length > 0;
+    case 'not_exists':   return val.length === 0;
+    // aliases legados
+    case 'gt':           return parseFloat(val) > parseFloat(expected);
+    case 'lt':           return parseFloat(val) < parseFloat(expected);
+    default:             return false;
   }
 }

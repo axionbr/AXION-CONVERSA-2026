@@ -85,11 +85,19 @@ export const getFlow = (id: string) => api.get(`/flows/${id}`).then(r => r.data)
 export const createFlow = (data?: any) => api.post('/flows', data || {}).then(r => r.data);
 export const updateFlow = (id: string, data: any) => api.put(`/flows/${id}`, data).then(r => r.data);
 export const toggleFlow = (id: string) => api.post(`/flows/${id}/toggle`).then(r => r.data);
+export const validateFlow = (id: string) => api.post(`/flows/${id}/validate`).then(r => r.data);
 export const duplicateFlow = (id: string) => api.post(`/flows/${id}/duplicate`).then(r => r.data);
 export const deleteFlow = (id: string) => api.delete(`/flows/${id}`).then(r => r.data);
 export const triggerFlow = (id: string, conversationId: string, leadId?: string) =>
   api.post(`/flows/${id}/trigger`, { conversationId, leadId }).then(r => r.data);
 export const getFlowExecutions = (id: string) => api.get(`/flows/${id}/executions`).then(r => r.data);
+// Sandbox/teste (não chama Z-API nem APIs externas)
+export const startTestFlow = (id: string, conversationId?: string, leadId?: string) =>
+  api.post(`/flows/${id}/test/start`, { conversationId, leadId }).then(r => r.data);
+export const sendTestFlowMessage = (executionId: string, message: string) =>
+  api.post(`/flows/test/${executionId}/message`, { message }).then(r => r.data);
+export const getTestFlowLogs = (executionId: string) =>
+  api.get(`/flows/test/${executionId}/logs`).then(r => r.data);
 
 // AI
 export const testAI = (message: string, storeId?: string) =>

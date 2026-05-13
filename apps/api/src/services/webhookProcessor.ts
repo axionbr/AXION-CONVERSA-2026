@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { classifyIntentAndTemperature, generateAiResponse, analyzeConversation, determineAgentStage, LeadContext, AgentType } from './aiService';
 import { sendTextMessage } from './zapiService';
 import { emitNewMessage, emitConversationUpdate, emitNewConversation } from '../socket';
-import { triggerFlowsByEvent, CONVERSATIONAL_EVENTS } from './flowEngine';
+import { triggerFlowsByEvent, continueExecutionWithResponse, CONVERSATIONAL_EVENTS } from './flowEngine';
 import { initiateHandoff, checkExpiredNotifications } from './handoffService';
 
 const prisma = new PrismaClient();
@@ -399,8 +399,27 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     });
 
     // ── PASSO 12 — VERIFICAÇÃO DE PRIORIDADE DE FLUXO ────────────────────────
-    // Regra: se existe fluxo ativo que responde a esta mensagem, ELE tem prioridade.
-    // A IA autônoma só age como fallback quando nenhum fluxo conversacional está ativo.
+    // Ordem: 1) continuar fluxo aguardando resposta  2) novo trigger  3) IA fallback
+
+    // ── 12a. Continuar FlowExecution aguardando resposta do cliente ───────────
+    const waitingExecution = await prisma.flowExecution.findFirst({
+      where: { conversationId: conversation.id, status: 'WAITING_RESPONSE' },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    if (waitingExecution) {
+      console.log(`[FLOW_CONTINUE] | execution: ${waitingExecution.id} | conv: ${conversation.id}`);
+      await prisma.automationLog.create({
+        data: {
+          type:           'FLOW_CONTINUED',
+          description:    `Fluxo continuado com resposta do cliente (execução: ${waitingExecution.id})`,
+          conversationId: conversation.id,
+          leadId:         lead.id,
+        },
+      }).catch(() => {});
+      await continueExecutionWithResponse(waitingExecution.id, content);
+      return; // Fluxo gerencia o atendimento — IA não deve responder
+    }
 
     console.log(`[FLOW_PRIORITY_CHECK] | conv: ${conversation.id} | lead: ${lead.id}`);
     await prisma.automationLog.create({

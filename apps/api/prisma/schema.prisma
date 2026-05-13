@@ -349,8 +349,10 @@ model FlowExecution {
   conversationId String?
   leadId         String?
   userId         String?
+  // RUNNING | WAITING_RESPONSE | COMPLETED | FAILED
   status         String    @default("RUNNING")
   currentNodeId  String?
+  testMode       Boolean   @default(false) // se true, não chama Z-API nem APIs externas
   startedAt      DateTime  @default(now())
   finishedAt     DateTime?
   error          String?

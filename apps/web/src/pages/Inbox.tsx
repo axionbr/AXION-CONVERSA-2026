@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Send, Bot, Pause, UserCheck, MessageSquare, Clock, X,
   RefreshCw, Sparkles, ChevronRight, Flame, Loader2, Copy, CheckCheck,
-  Play, Bell, MapPin, CheckCircle2, AlertTriangle,
+  Play, Bell, MapPin, CheckCircle2, AlertTriangle, Zap,
 } from 'lucide-react';
 import {
   getConversations, getConversationMessages, sendMessage,
@@ -12,6 +12,7 @@ import {
   closeConversation, waitConversation, markConversationRead,
   getConversationAnalysis, requestConversationAnalysis,
   getPendingHandoffs, acceptHandoff,
+  getFlows, triggerFlow,
 } from '../lib/api';
 import { getSocket, joinConversation, leaveConversation } from '../lib/socket';
 import {
@@ -176,6 +177,7 @@ export default function Inbox() {
   const [showAnalysis, setShowAnalysis]   = useState(true);
   const [copied, setCopied]               = useState(false);
   const [handoffNotifs, setHandoffNotifs] = useState<any[]>([]);
+  const [showFlowPicker, setShowFlowPicker] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const qc        = useQueryClient();
@@ -373,6 +375,22 @@ export default function Inbox() {
     mutationFn: (notifId: string) => acceptHandoff(notifId),
     onSuccess: (_, notifId) => {
       setHandoffNotifs(prev => prev.filter(n => n.notificationId !== notifId));
+      qc.invalidateQueries({ queryKey: ['conversations-inbox'] });
+    },
+  });
+
+  // Fluxos ativos para disparo manual
+  const { data: activeFlows = [] } = useQuery({
+    queryKey: ['active-flows'],
+    queryFn:  () => getFlows().then((fs: any[]) => fs.filter(f => f.active)),
+    enabled:  showFlowPicker,
+  });
+
+  const triggerMut = useMutation({
+    mutationFn: ({ flowId, convId, leadId }: { flowId: string; convId: string; leadId?: string }) =>
+      triggerFlow(flowId, convId, leadId),
+    onSuccess: () => {
+      setShowFlowPicker(false);
       qc.invalidateQueries({ queryKey: ['conversations-inbox'] });
     },
   });
@@ -646,6 +664,15 @@ export default function Inbox() {
                         </button>
                       )}
 
+                      {/* Disparar Fluxo */}
+                      <button
+                        onClick={() => setShowFlowPicker(true)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-violet-500/15 text-violet-400 text-xs hover:bg-violet-500/25 transition-colors"
+                        title="Disparar fluxo manualmente"
+                      >
+                        <Zap className="w-3.5 h-3.5" /> Fluxo
+                      </button>
+
                       {/* IA */}
                       {selected.aiEnabled ? (
                         <button onClick={() => pauseMut.mutate()} disabled={pauseMut.isPending}
@@ -903,6 +930,106 @@ export default function Inbox() {
           </div>
         )}
       </div>
+
+      {/* ─── Modal: Disparar Fluxo ─────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showFlowPicker && selected && (
+          <motion.div
+            key="flow-picker-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowFlowPicker(false)}
+          >
+            <motion.div
+              key="flow-picker-panel"
+              initial={{ opacity: 0, scale: 0.95, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 8 }}
+              transition={{ duration: 0.15 }}
+              className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-violet-400" />
+                  <span className="text-sm font-semibold text-foreground">Disparar Fluxo</span>
+                </div>
+                <button
+                  onClick={() => setShowFlowPicker(false)}
+                  className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Conversa alvo */}
+              <div className="px-4 py-2 border-b border-border bg-muted/30">
+                <p className="text-[11px] text-muted-foreground">
+                  Conversa:
+                  <span className="ml-1 text-foreground font-medium">
+                    {selected.contact?.name || selected.contact?.phone || selectedId}
+                  </span>
+                </p>
+              </div>
+
+              {/* Lista de fluxos */}
+              <div className="max-h-64 overflow-y-auto">
+                {activeFlows.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-10 gap-2">
+                    <Zap className="w-8 h-8 text-muted-foreground/30" />
+                    <p className="text-sm text-muted-foreground">Nenhum fluxo ativo</p>
+                    <p className="text-xs text-muted-foreground/60">Ative um fluxo em Automações</p>
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {activeFlows.map((flow: any) => (
+                      <li key={flow.id} className="flex items-center justify-between px-4 py-3 hover:bg-accent/30 transition-colors">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{flow.name}</p>
+                          {flow.description && (
+                            <p className="text-[11px] text-muted-foreground truncate">{flow.description}</p>
+                          )}
+                          <p className="text-[10px] text-violet-400 mt-0.5">
+                            {flow._count?.executions ?? 0} execuções
+                          </p>
+                        </div>
+                        <button
+                          onClick={() =>
+                            triggerMut.mutate({
+                              flowId: flow.id,
+                              convId: selectedId,
+                              leadId: selected.lead?.id,
+                            })
+                          }
+                          disabled={triggerMut.isPending}
+                          className="ml-3 shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/20 text-violet-400 text-xs font-medium hover:bg-violet-500/30 disabled:opacity-50 transition-colors"
+                        >
+                          {triggerMut.isPending ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Play className="w-3.5 h-3.5" />
+                          )}
+                          Disparar
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-4 py-2.5 border-t border-border bg-muted/20">
+                <p className="text-[10px] text-muted-foreground text-center">
+                  O fluxo será executado imediatamente nesta conversa
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

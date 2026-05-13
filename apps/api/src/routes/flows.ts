@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { executeFlow } from '../services/flowEngine';
+import { executeFlow, continueExecutionWithResponse } from '../services/flowEngine';
+import { validateFlow } from '../services/flowValidation';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -135,23 +136,50 @@ router.put('/:id', async (req, res, next) => {
 
 router.post('/:id/toggle', async (req, res, next) => {
   try {
-    const flow = await prisma.flow.findUnique({ where: { id: req.params.id }, include: { nodes: true } });
+    const flow = await prisma.flow.findUnique({
+      where: { id: req.params.id },
+      include: { nodes: true, edges: true },
+    });
     if (!flow) return res.status(404).json({ error: 'Fluxo não encontrado' });
 
+    // Ao ativar, valida o fluxo com o serviço de validação
     if (!flow.active) {
-      const hasStart = flow.nodes.some(n => n.type === 'START');
-      const hasEnd = flow.nodes.some(n => n.type === 'END');
-      if (!hasStart || !hasEnd) {
-        return res.status(400).json({ error: 'Fluxo precisa de nó START e END para ser ativado' });
+      const validation = validateFlow(
+        flow.nodes.map(n => ({ id: n.id, type: n.type, title: n.title, config: safeJson(n.config) ?? {} })),
+        flow.edges.map(e => ({ id: e.id, sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
+      );
+      if (!validation.valid) {
+        return res.status(400).json({
+          error:    'Fluxo inválido — corrija os erros antes de ativar',
+          errors:   validation.errors,
+          warnings: validation.warnings,
+        });
       }
     }
 
     const updated = await prisma.flow.update({
       where: { id: req.params.id },
-      data: { active: !flow.active },
+      data:  { active: !flow.active },
       include: flowInclude,
     });
     res.json(parseFlowJson(updated));
+  } catch (err) { next(err); }
+});
+
+// POST /flows/:id/validate — valida sem ativar
+router.post('/:id/validate', async (req, res, next) => {
+  try {
+    const flow = await prisma.flow.findUnique({
+      where: { id: req.params.id },
+      include: { nodes: true, edges: true },
+    });
+    if (!flow) return res.status(404).json({ error: 'Fluxo não encontrado' });
+
+    const result = validateFlow(
+      flow.nodes.map(n => ({ id: n.id, type: n.type, title: n.title, config: safeJson(n.config) ?? {} })),
+      flow.edges.map(e => ({ id: e.id, sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
+    );
+    res.json(result);
   } catch (err) { next(err); }
 });
 
@@ -207,15 +235,17 @@ router.delete('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /:id/trigger — disparo manual pelo Inbox
 router.post('/:id/trigger', async (req, res, next) => {
   try {
     const { conversationId, leadId } = req.body;
     if (!conversationId) return res.status(400).json({ error: 'conversationId obrigatório' });
-    await executeFlow(req.params.id, conversationId, leadId);
-    res.json({ success: true });
+    const executionId = await executeFlow(req.params.id, conversationId, leadId);
+    res.json({ success: true, executionId });
   } catch (err) { next(err); }
 });
 
+// GET /:id/executions — histórico de execuções
 router.get('/:id/executions', async (req, res, next) => {
   try {
     const executions = await prisma.flowExecution.findMany({
@@ -228,10 +258,136 @@ router.get('/:id/executions', async (req, res, next) => {
       ...ex,
       steps: ex.steps.map(s => ({
         ...s,
-        input: safeJson(s.input),
+        input:  safeJson(s.input),
         output: safeJson(s.output),
       })),
     })));
+  } catch (err) { next(err); }
+});
+
+// ─── Endpoints de sandbox/teste ───────────────────────────────────────────────
+
+// POST /:id/test/start — inicia execução em modo teste (sem Z-API, sem API externa)
+router.post('/:id/test/start', async (req: AuthRequest, res, next) => {
+  try {
+    // Usa conversationId fornecida ou cria uma mock para o sandbox
+    const { conversationId: reqConvId, leadId } = req.body;
+
+    // Se não tiver conversa real, cria uma temporária vinculada ao usuário
+    let conversationId = reqConvId;
+    if (!conversationId) {
+      // Busca ou cria contato/conversa de teste
+      const testPhone  = `test-${req.user!.id}`;
+      let contact      = await prisma.contact.findUnique({ where: { phone: testPhone } });
+      if (!contact) {
+        contact = await prisma.contact.create({
+          data: { name: 'Simulador de Teste', phone: testPhone },
+        });
+      }
+      const existingConv = await prisma.conversation.findFirst({
+        where: { contactId: contact.id, status: { in: ['NOVO', 'EM_ATENDIMENTO'] } },
+      });
+      if (existingConv) {
+        conversationId = existingConv.id;
+      } else {
+        const newConv = await prisma.conversation.create({
+          data: { contactId: contact.id, status: 'NOVO', aiEnabled: false },
+        });
+        conversationId = newConv.id;
+      }
+    }
+
+    const executionId = await executeFlow(req.params.id, conversationId, leadId, /* testMode */ true);
+    if (!executionId) {
+      return res.status(400).json({ error: 'Fluxo não pôde ser iniciado. Verifique se está ativo e tem nó START.' });
+    }
+
+    const execution = await prisma.flowExecution.findUnique({
+      where:   { id: executionId },
+      include: {
+        steps: {
+          orderBy: { createdAt: 'asc' },
+          include: { node: { select: { id: true, type: true, title: true } } },
+        },
+      },
+    });
+
+    res.json({ executionId, conversationId, execution });
+  } catch (err) { next(err); }
+});
+
+// POST /test/:executionId/message — envia mensagem do cliente para execução aguardando
+router.post('/test/:executionId/message', async (req, res, next) => {
+  try {
+    const { message } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'message obrigatório' });
+
+    await continueExecutionWithResponse(req.params.executionId, message.trim());
+
+    const execution = await prisma.flowExecution.findUnique({
+      where:   { id: req.params.executionId },
+      include: {
+        steps: {
+          orderBy: { createdAt: 'asc' },
+          include: { node: { select: { id: true, type: true, title: true } } },
+        },
+      },
+    });
+
+    if (!execution) return res.status(404).json({ error: 'Execução não encontrada' });
+
+    // Busca mensagens outbound geradas pelo fluxo nesta conversa
+    const messages = await prisma.message.findMany({
+      where:   { conversationId: execution.conversationId ?? '', fromFlow: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.json({
+      execution: {
+        ...execution,
+        steps: execution.steps.map(s => ({
+          ...s,
+          input:  safeJson(s.input),
+          output: safeJson(s.output),
+        })),
+      },
+      messages,
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /test/:executionId/logs — logs e steps de uma execução
+router.get('/test/:executionId/logs', async (req, res, next) => {
+  try {
+    const execution = await prisma.flowExecution.findUnique({
+      where:   { id: req.params.executionId },
+      include: {
+        steps: {
+          orderBy: { createdAt: 'asc' },
+          include: { node: { select: { id: true, type: true, title: true } } },
+        },
+        flow: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!execution) return res.status(404).json({ error: 'Execução não encontrada' });
+
+    const messages = execution.conversationId
+      ? await prisma.message.findMany({
+          where:   { conversationId: execution.conversationId, fromFlow: true },
+          orderBy: { createdAt: 'asc' },
+        })
+      : [];
+
+    res.json({
+      ...execution,
+      steps: execution.steps.map(s => ({
+        ...s,
+        input:  safeJson(s.input),
+        output: safeJson(s.output),
+      })),
+      messages,
+    });
   } catch (err) { next(err); }
 });
 

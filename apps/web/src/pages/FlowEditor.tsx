@@ -11,9 +11,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Save, Play, Pause, ArrowLeft, Plus, X, Settings, Zap,
   MessageSquare, HelpCircle, GitBranch, Bot, Tag, User, Store,
-  Globe, Clock, Flag, Trash2, GripVertical,
+  Globe, Clock, Flag, Trash2, GripVertical, FlaskConical, Send, Loader2,
 } from 'lucide-react';
-import { getFlow, updateFlow, toggleFlow } from '../lib/api';
+import { getFlow, updateFlow, toggleFlow, startTestFlow, sendTestFlowMessage, getTestFlowLogs } from '../lib/api';
 import { cn } from '../lib/utils';
 
 // ─── Node type definitions ────────────────────────────────────────────────────
@@ -369,6 +369,182 @@ function PaletteItem({
   );
 }
 
+// ─── Sandbox / simulador de fluxo ────────────────────────────────────────────
+// Permite testar um fluxo interativamente sem enviar mensagens reais via Z-API.
+
+function FlowSandbox({ flowId, onClose }: { flowId: string; onClose: () => void }) {
+  const [executionId, setExecutionId] = useState<string | null>(null);
+  const [messages,    setMessages]    = useState<{ role: 'bot' | 'user'; text: string }[]>([]);
+  const [logs,        setLogs]        = useState<any[]>([]);
+  const [status,      setStatus]      = useState<string>('idle');
+  const [input,       setInput]       = useState('');
+  const [loading,     setLoading]     = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  async function start() {
+    setLoading(true);
+    try {
+      const res = await startTestFlow(flowId);
+      setExecutionId(res.executionId);
+      setStatus(res.execution?.status ?? 'RUNNING');
+      refreshMessages(res.executionId);
+    } catch (e: any) {
+      setMessages([{ role: 'bot', text: `Erro ao iniciar: ${e.response?.data?.error || e.message}` }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshMessages(eid: string) {
+    try {
+      const data = await getTestFlowLogs(eid);
+      setStatus(data.status);
+      setLogs(data.steps || []);
+      // Monta histórico de mensagens a partir dos steps e mensagens geradas
+      const flowMsgs: { role: 'bot' | 'user'; text: string }[] = (data.messages || []).map((m: any) => ({
+        role: m.direction === 'OUTBOUND' ? 'bot' : 'user',
+        text: m.content,
+      }));
+      setMessages(flowMsgs);
+    } catch { /* silencioso */ }
+  }
+
+  async function reply() {
+    if (!executionId || !input.trim()) return;
+    const text = input.trim();
+    setInput('');
+    setMessages(p => [...p, { role: 'user', text }]);
+    setLoading(true);
+    try {
+      await sendTestFlowMessage(executionId, text);
+      await refreshMessages(executionId);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const statusColor = {
+    RUNNING: 'text-blue-400', WAITING_RESPONSE: 'text-yellow-400',
+    COMPLETED: 'text-green-400', FAILED: 'text-red-400', idle: 'text-muted-foreground',
+  }[status] ?? 'text-muted-foreground';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+    >
+      <motion.div
+        initial={{ scale: 0.95 }}
+        animate={{ scale: 1 }}
+        className="bg-card border border-border rounded-2xl w-full max-w-3xl h-[80vh] flex overflow-hidden shadow-2xl"
+      >
+        {/* Chat */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/80">
+            <div className="flex items-center gap-2">
+              <FlaskConical className="w-4 h-4 text-primary" />
+              <span className="font-semibold text-sm">Simulador de Fluxo</span>
+              <span className={cn('text-xs font-mono', statusColor)}>• {status}</span>
+            </div>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {messages.length === 0 && status === 'idle' && (
+              <p className="text-center text-muted-foreground text-sm py-8">
+                Clique em "Iniciar" para testar o fluxo sem enviar mensagens reais.
+              </p>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
+                <div className={cn(
+                  'max-w-[75%] px-3 py-2 rounded-xl text-sm',
+                  m.role === 'bot'
+                    ? 'bg-blue-600/80 text-white rounded-bl-sm'
+                    : 'bg-muted text-foreground rounded-br-sm',
+                )}>
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-blue-600/40 px-3 py-2 rounded-xl">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-300" />
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          <div className="p-3 border-t border-border flex gap-2">
+            {status === 'idle' ? (
+              <button
+                onClick={start}
+                disabled={loading}
+                className="w-full flex items-center justify-center gap-2 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-60"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FlaskConical className="w-4 h-4" />}
+                Iniciar Teste
+              </button>
+            ) : (
+              <>
+                <input
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && reply()}
+                  placeholder={status === 'WAITING_RESPONSE' ? 'Digite a resposta...' : 'Fluxo em execução...'}
+                  disabled={status !== 'WAITING_RESPONSE' || loading}
+                  className="flex-1 bg-input text-sm px-3 py-2 rounded-lg border border-border outline-none focus:border-primary disabled:opacity-50"
+                />
+                <button
+                  onClick={reply}
+                  disabled={!input.trim() || status !== 'WAITING_RESPONSE' || loading}
+                  className="px-3 py-2 bg-primary text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Logs */}
+        <div className="w-52 shrink-0 border-l border-border bg-card/50 flex flex-col">
+          <div className="px-3 py-3 border-b border-border">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Steps ({logs.length})
+            </p>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+            {logs.map((step: any, i) => (
+              <div key={i} className={cn(
+                'text-xs p-2 rounded-lg border',
+                step.status === 'completed' ? 'bg-green-500/10 border-green-500/20 text-green-400'
+                  : step.status === 'failed' ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                  : 'bg-muted border-border text-muted-foreground',
+              )}>
+                <p className="font-medium truncate">{step.node?.type ?? '—'}</p>
+                <p className="text-[10px] opacity-70 truncate">{step.node?.title || step.nodeId}</p>
+                {step.error && <p className="text-[10px] text-red-400 mt-0.5 truncate">{step.error}</p>}
+              </div>
+            ))}
+            {logs.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4">Sem steps ainda</p>
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── Inner canvas (uses useReactFlow) ────────────────────────────────────────
 
 function FlowEditorCanvas() {
@@ -388,6 +564,7 @@ function FlowEditorCanvas() {
   const [flowDesc, setFlowDesc]           = useState('');
   const [saved, setSaved]                 = useState(false);
   const [isDragOver, setIsDragOver]       = useState(false);
+  const [showSandbox, setShowSandbox]     = useState(false);
 
   const { data: flow } = useQuery({
     queryKey: ['flow', id],
@@ -584,6 +761,14 @@ function FlowEditorCanvas() {
           >
             {flow?.active ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
             {flow?.active ? 'Desativar' : 'Ativar'}
+          </button>
+          <button
+            onClick={() => setShowSandbox(true)}
+            title="Testar fluxo sem enviar mensagens reais"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2a2a2a] text-[#b3b3b3] rounded-lg text-xs font-medium hover:bg-accent hover:text-foreground transition-colors border border-border"
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+            Testar
           </button>
           <button
             onClick={handleSave}
@@ -803,6 +988,13 @@ function FlowEditorCanvas() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* ── Sandbox modal ── */}
+      <AnimatePresence>
+        {showSandbox && id && (
+          <FlowSandbox flowId={id} onClose={() => setShowSandbox(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
