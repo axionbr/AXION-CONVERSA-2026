@@ -250,10 +250,13 @@ function NodeConfigPanel({
               <label className="text-xs text-muted-foreground">Opções</label>
               <button
                 onClick={() => {
+                  // Resolve novo array de opções ANTES de chamar setConfig/onUpdate
                   const opts: any[] = Array.isArray(config.options) ? config.options : [];
-                  const next = { label: `Opção ${opts.length + 1}`, value: String(opts.length + 1) };
-                  setConfig((c: any) => ({ ...c, options: [...opts, next] }));
-                  save();
+                  const newOpts = [...opts, { label: `Opção ${opts.length + 1}`, value: String(opts.length + 1) }];
+                  const newCfg  = { ...config, options: newOpts };
+                  setConfig(newCfg);
+                  // Chama onUpdate diretamente com o valor computado (sem closure estale)
+                  onUpdate(node.id, { ...node.data, label, config: newCfg });
                 }}
                 className="text-[10px] text-primary hover:underline"
               >
@@ -288,9 +291,11 @@ function NodeConfigPanel({
                   />
                   <button
                     onClick={() => {
-                      const opts = (config.options || []).filter((_: any, j: number) => j !== i);
-                      setConfig((c: any) => ({ ...c, options: opts }));
-                      save();
+                      // Mesma correção: resolve o novo array e chama onUpdate diretamente
+                      const newOpts = (config.options || []).filter((_: any, j: number) => j !== i);
+                      const newCfg  = { ...config, options: newOpts };
+                      setConfig(newCfg);
+                      onUpdate(node.id, { ...node.data, label, config: newCfg });
                     }}
                     className="shrink-0 text-muted-foreground hover:text-destructive transition-colors"
                   >
