@@ -270,31 +270,40 @@ router.get('/:id/executions', async (req, res, next) => {
 // POST /:id/test/start — inicia execução em modo teste (sem Z-API, sem API externa)
 router.post('/:id/test/start', async (req: AuthRequest, res, next) => {
   try {
-    // Usa conversationId fornecida ou cria uma mock para o sandbox
     const { conversationId: reqConvId, leadId } = req.body;
 
-    // Se não tiver conversa real, cria uma temporária vinculada ao usuário
     let conversationId = reqConvId;
     if (!conversationId) {
-      // Busca ou cria contato/conversa de teste
-      const testPhone  = `test-${req.user!.id}`;
-      let contact      = await prisma.contact.findUnique({ where: { phone: testPhone } });
+      // Cria SEMPRE uma conversa nova e isolada para cada sessão de teste.
+      // Isso evita mistura de mensagens de execuções anteriores.
+      const testPhone = `test-${req.user!.id}`;
+      let contact = await prisma.contact.findUnique({ where: { phone: testPhone } });
       if (!contact) {
         contact = await prisma.contact.create({
           data: { name: 'Simulador de Teste', phone: testPhone },
         });
       }
-      const existingConv = await prisma.conversation.findFirst({
-        where: { contactId: contact.id, status: { in: ['NOVO', 'EM_ATENDIMENTO'] } },
+
+      // Cancela qualquer execução WAITING_RESPONSE anterior neste contato
+      const oldConvs = await prisma.conversation.findMany({
+        where: { contactId: contact.id },
+        select: { id: true },
       });
-      if (existingConv) {
-        conversationId = existingConv.id;
-      } else {
-        const newConv = await prisma.conversation.create({
-          data: { contactId: contact.id, status: 'NOVO', aiEnabled: false },
+      if (oldConvs.length > 0) {
+        await prisma.flowExecution.updateMany({
+          where: {
+            conversationId: { in: oldConvs.map(c => c.id) },
+            status: 'WAITING_RESPONSE',
+          },
+          data: { status: 'FAILED', error: 'Cancelado — nova sessão de teste iniciada', finishedAt: new Date() },
         });
-        conversationId = newConv.id;
       }
+
+      // Sempre cria conversa nova para sandbox limpo
+      const newConv = await prisma.conversation.create({
+        data: { contactId: contact.id, status: 'NOVO', aiEnabled: false },
+      });
+      conversationId = newConv.id;
     }
 
     // forceRun=true permite testar fluxos ainda não ativados
@@ -337,11 +346,17 @@ router.post('/test/:executionId/message', async (req, res, next) => {
 
     if (!execution) return res.status(404).json({ error: 'Execução não encontrada' });
 
-    // Busca mensagens outbound geradas pelo fluxo nesta conversa
-    const messages = await prisma.message.findMany({
-      where:   { conversationId: execution.conversationId ?? '', fromFlow: true },
-      orderBy: { createdAt: 'asc' },
-    });
+    // Busca apenas mensagens desta execução (filtro por startedAt da execução)
+    const messages = execution?.conversationId && execution.startedAt
+      ? await prisma.message.findMany({
+          where: {
+            conversationId: execution.conversationId,
+            fromFlow: true,
+            createdAt: { gte: execution.startedAt },
+          },
+          orderBy: { createdAt: 'asc' },
+        })
+      : [];
 
     res.json({
       execution: {
@@ -373,9 +388,14 @@ router.get('/test/:executionId/logs', async (req, res, next) => {
 
     if (!execution) return res.status(404).json({ error: 'Execução não encontrada' });
 
-    const messages = execution.conversationId
+    // Filtra mensagens apenas desta execução pelo timestamp de início
+    const messages = execution.conversationId && execution.startedAt
       ? await prisma.message.findMany({
-          where:   { conversationId: execution.conversationId, fromFlow: true },
+          where: {
+            conversationId: execution.conversationId,
+            fromFlow: true,
+            createdAt: { gte: execution.startedAt },
+          },
           orderBy: { createdAt: 'asc' },
         })
       : [];
