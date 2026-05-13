@@ -297,9 +297,10 @@ router.post('/:id/test/start', async (req: AuthRequest, res, next) => {
       }
     }
 
-    const executionId = await executeFlow(req.params.id, conversationId, leadId, /* testMode */ true);
+    // forceRun=true permite testar fluxos ainda não ativados
+    const executionId = await executeFlow(req.params.id, conversationId, leadId, /* testMode */ true, /* forceRun */ true);
     if (!executionId) {
-      return res.status(400).json({ error: 'Fluxo não pôde ser iniciado. Verifique se está ativo e tem nó START.' });
+      return res.status(400).json({ error: 'Fluxo não pôde ser iniciado. Verifique se tem nó START.' });
     }
 
     const execution = await prisma.flowExecution.findUnique({

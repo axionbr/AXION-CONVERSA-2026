@@ -78,6 +78,22 @@ export function validateFlow(
       }
     }
 
+    if (node.type === 'MENU') {
+      if (!cfg.text?.trim()) {
+        errors.push({ nodeId: node.id, type: 'ERROR', message: `Nó "Menu" (${label}) precisa ter texto da mensagem.` });
+      }
+      if (!cfg.options || !Array.isArray(cfg.options) || cfg.options.length === 0) {
+        errors.push({ nodeId: node.id, type: 'ERROR', message: `Nó "Menu" (${label}) precisa ter pelo menos uma opção configurada.` });
+      } else {
+        for (const opt of cfg.options) {
+          if (!opt.label?.trim()) {
+            errors.push({ nodeId: node.id, type: 'ERROR', message: `Nó "Menu" (${label}) tem opção sem rótulo.` });
+            break;
+          }
+        }
+      }
+    }
+
     if (node.type === 'CONDITION') {
       if (!cfg.field) {
         errors.push({ nodeId: node.id, type: 'ERROR', message: `Nó "Condição" (${label}) precisa ter um campo configurado.` });
@@ -93,7 +109,7 @@ export function validateFlow(
       }
     }
 
-    // Nó solto (sem saída) — exceto END
+    // Nó solto (sem saída) — exceto END e MENU com nextNodeId nas opções
     if (!['END', 'AGENT_HANDOFF', 'PAUSE_AI'].includes(node.type)) {
       const hasOut = edges.some(e => e.sourceNodeId === node.id);
       if (!hasOut) {

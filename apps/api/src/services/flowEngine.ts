@@ -71,13 +71,14 @@ export async function executeFlow(
   conversationId: string,
   leadId?: string,
   testMode = false,
+  forceRun = false, // permite executar fluxo inativo (sandbox/teste)
 ): Promise<string | null> {
   const flow = await prisma.flow.findUnique({
     where:   { id: flowId },
     include: { nodes: true, edges: true },
   });
 
-  if (!flow || !flow.active) return null;
+  if (!flow || (!flow.active && !forceRun)) return null;
 
   const startNode = flow.nodes.find(n => n.type === 'START');
   if (!startNode) return null;
@@ -127,14 +128,20 @@ export async function continueExecutionWithResponse(
   if (!execution || execution.status !== 'WAITING_RESPONSE') return;
   if (!execution.conversationId || !execution.currentNodeId) return;
 
-  const nextNodeId = getNextNode(execution.flow.edges, execution.currentNodeId);
+  const currentNode = execution.flow.nodes.find((n: any) => n.id === execution.currentNodeId);
 
   await prisma.flowExecution.update({
     where: { id: executionId },
     data:  { status: 'RUNNING' },
   });
 
-  if (!nextNodeId) {
+  // MENU: re-executa o próprio nó com o input do usuário para processar a escolha
+  // QUESTION/outros: avança para o próximo nó passando a resposta
+  const targetNodeId = currentNode?.type === 'MENU'
+    ? execution.currentNodeId
+    : getNextNode(execution.flow.edges, execution.currentNodeId);
+
+  if (!targetNodeId) {
     await prisma.flowExecution.update({
       where: { id: executionId },
       data:  { status: 'COMPLETED', finishedAt: new Date() },
@@ -145,7 +152,7 @@ export async function continueExecutionWithResponse(
   try {
     await executeNode(
       executionId,
-      nextNodeId,
+      targetNodeId,
       execution.flow,
       execution.conversationId,
       execution.leadId ?? undefined,
@@ -342,6 +349,111 @@ async function executeNode(
 
         output = { waiting: true, question };
         nextNodeId = null; // Interrompe aqui
+        break;
+      }
+
+      // ── Menu de opções (aguarda escolha do cliente) ───────────────────────────
+      case 'MENU': {
+        const menuText    = config.text || config.message || '';
+        const options     = Array.isArray(config.options) ? config.options : [];
+        const invalidMsg  = config.invalidMessage || 'Opção inválida. Por favor, escolha uma das opções listadas.';
+        const maxAttempts = Number(config.maxAttempts ?? 3);
+
+        if (!userInput) {
+          // Primeira execução: envia menu e aguarda
+          if (menuText.trim()) {
+            let fullMenu = menuText.trim();
+            // Auto-adiciona lista de opções se não estiver no texto
+            if (options.length > 0) {
+              const hasNumberedLine = /^\d+\s*[-.)]\s*/m.test(fullMenu);
+              if (!hasNumberedLine) {
+                fullMenu += '\n\n' + options
+                  .map((opt: any, i: number) => `${opt.value ?? (i + 1)} - ${opt.label}`)
+                  .join('\n');
+              }
+            }
+            await sendFlowMessage(conversationId, nodeId, fullMenu, 'FLOW', testMode);
+          }
+          await prisma.flowExecution.update({
+            where: { id: executionId },
+            data:  { status: 'WAITING_RESPONSE', currentNodeId: nodeId },
+          });
+          output    = { waiting: true, optionCount: options.length };
+          nextNodeId = null;
+        } else {
+          // Usuário respondeu: tenta encontrar opção correspondente
+          const normalized = userInput.trim().toLowerCase();
+          let matchedOption: any = null;
+
+          for (let i = 0; i < options.length; i++) {
+            const opt      = options[i];
+            const optValue = String(opt.value ?? (i + 1)).toLowerCase();
+            const optLabel = String(opt.label  ?? '').toLowerCase();
+            const aliases  = Array.isArray(opt.aliases)
+              ? opt.aliases.map((a: string) => a.toLowerCase())
+              : [];
+
+            if (
+              normalized === optValue ||
+              normalized === optLabel ||
+              aliases.includes(normalized) ||
+              aliases.some((a: string) => normalized.includes(a))
+            ) {
+              matchedOption = opt;
+              break;
+            }
+          }
+
+          if (matchedOption) {
+            // Encontrou a opção — navega para o destino
+            const matchedEdge = flow.edges.find((e: any) => {
+              if (e.sourceNodeId !== nodeId) return false;
+              const cond = typeof e.condition === 'string'
+                ? e.condition
+                : (e.condition?.value ?? e.condition?.label ?? '');
+              return (
+                cond === String(matchedOption.value ?? '') ||
+                e.label === String(matchedOption.value ?? '') ||
+                e.label === matchedOption.label
+              );
+            });
+            nextNodeId = matchedOption.nextNodeId || matchedEdge?.targetNodeId || getNextNode(flow.edges, nodeId);
+            output     = { matched: matchedOption.label, value: matchedOption.value, userInput };
+
+            // Salva escolha no campo personalizado se configurado
+            if (config.saveToField && leadId) {
+              prisma.customField.findUnique({ where: { key: config.saveToField } }).then(field => {
+                if (field && leadId) {
+                  return prisma.customFieldValue.upsert({
+                    where:  { customFieldId_leadId: { customFieldId: field.id, leadId } },
+                    update: { value: userInput },
+                    create: { customFieldId: field.id, leadId, value: userInput },
+                  });
+                }
+              }).catch(() => {});
+            }
+          } else {
+            // Opção não encontrada — verifica tentativas
+            const attemptCount = await prisma.flowExecutionStep.count({
+              where: { executionId, nodeId, NOT: { input: '{}' } },
+            });
+
+            if (attemptCount >= maxAttempts) {
+              // Esgotou tentativas — vai ao fallback
+              nextNodeId = config.fallbackNextNodeId || getNextNode(flow.edges, nodeId);
+              output     = { maxAttemptsReached: true, attempts: attemptCount };
+            } else {
+              // Reenvia mensagem de erro e aguarda novamente
+              await sendFlowMessage(conversationId, nodeId, invalidMsg, 'FLOW', testMode);
+              await prisma.flowExecution.update({
+                where: { id: executionId },
+                data:  { status: 'WAITING_RESPONSE', currentNodeId: nodeId },
+              });
+              output    = { invalid: true, attempt: attemptCount + 1, userInput };
+              nextNodeId = null;
+            }
+          }
+        }
         break;
       }
 

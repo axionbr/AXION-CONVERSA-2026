@@ -12,7 +12,9 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\" -Recurse -File)",
       "Bash(Select-Object FullName)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\services\" -File)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(npx vitest *)",
+      "Bash(npm test *)"
     ]
   }
 }

@@ -12,6 +12,7 @@ import {
   Save, Play, Pause, ArrowLeft, Plus, X, Settings, Zap,
   MessageSquare, HelpCircle, GitBranch, Bot, Tag, User, Store,
   Globe, Clock, Flag, Trash2, GripVertical, FlaskConical, Send, Loader2,
+  List,
 } from 'lucide-react';
 import { getFlow, updateFlow, toggleFlow, startTestFlow, sendTestFlowMessage, getTestFlowLogs } from '../lib/api';
 import { cn } from '../lib/utils';
@@ -27,6 +28,7 @@ const NODE_TYPES_DEF = [
   // ── Mensagens ────────────────────────────────────────────────────────────────
   { type: 'MESSAGE',         label: 'Mensagem Fixa',      icon: MessageSquare,color: '#3b82f6', description: 'Envia mensagem de texto estática' },
   { type: 'QUESTION',        label: 'Pergunta',           icon: HelpCircle,   color: '#8b5cf6', description: 'Aguarda resposta do contato' },
+  { type: 'MENU',            label: 'Menu de Opções',     icon: List,         color: '#f59e0b', description: 'Apresenta menu numerado e aguarda escolha' },
   // ── Agentes Comerciais IA (têm prioridade sobre IA autônoma) ─────────────────
   { type: 'AGENT_SDR',       label: 'Agente SDR',         icon: Bot,          color: '#0ea5e9', description: 'Primeiro contato: recebe e entende intenção' },
   { type: 'AGENT_QUALIFIER', label: 'Agente Qualificador',icon: Bot,          color: '#f59e0b', description: 'Coleta cidade, interesse e perfil' },
@@ -129,6 +131,11 @@ function FlowNode({ data, selected }: any) {
         {data.config?.text     && <p className="text-xs text-muted-foreground truncate mt-0.5">{data.config.text}</p>}
         {data.config?.tagName  && <p className="text-xs text-muted-foreground truncate mt-0.5">#{data.config.tagName}</p>}
         {data.config?.delay    && <p className="text-xs text-muted-foreground mt-0.5">{data.config.delay} {data.config.unit}</p>}
+        {data.config?.options  && Array.isArray(data.config.options) && (
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {data.config.options.length} opç{data.config.options.length === 1 ? 'ão' : 'ões'}
+          </p>
+        )}
       </div>
 
       {/* Source handle (bottom) — all nodes except END */}
@@ -226,6 +233,98 @@ function NodeConfigPanel({
             <ConfigField {...fieldProps('saveToField')} placeholder="chave_do_campo" />
           </div>
         </>
+      )}
+
+      {node.data.type === 'MENU' && (
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Texto do Menu</label>
+            <ConfigArea
+              {...fieldProps('text')}
+              placeholder={'Como posso te ajudar?\n1 - Comprar\n2 - Suporte\n3 - Sair'}
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-muted-foreground">Opções</label>
+              <button
+                onClick={() => {
+                  const opts: any[] = Array.isArray(config.options) ? config.options : [];
+                  const next = { label: `Opção ${opts.length + 1}`, value: String(opts.length + 1) };
+                  setConfig((c: any) => ({ ...c, options: [...opts, next] }));
+                  save();
+                }}
+                className="text-[10px] text-primary hover:underline"
+              >
+                + Adicionar
+              </button>
+            </div>
+            <div className="space-y-1">
+              {(config.options || []).map((opt: any, i: number) => (
+                <div key={i} className="flex gap-1 items-center">
+                  <span className="text-[10px] text-muted-foreground w-4 shrink-0">{i + 1}.</span>
+                  <input
+                    value={opt.label || ''}
+                    onChange={e => {
+                      const opts = [...(config.options || [])];
+                      opts[i] = { ...opts[i], label: e.target.value };
+                      setConfig((c: any) => ({ ...c, options: opts }));
+                    }}
+                    onBlur={save}
+                    placeholder="Rótulo"
+                    className="flex-1 min-w-0 bg-input text-xs px-2 py-1 rounded border border-border outline-none focus:border-primary"
+                  />
+                  <input
+                    value={opt.value || ''}
+                    onChange={e => {
+                      const opts = [...(config.options || [])];
+                      opts[i] = { ...opts[i], value: e.target.value };
+                      setConfig((c: any) => ({ ...c, options: opts }));
+                    }}
+                    onBlur={save}
+                    placeholder="Val"
+                    className="w-10 bg-input text-xs px-2 py-1 rounded border border-border outline-none focus:border-primary"
+                  />
+                  <button
+                    onClick={() => {
+                      const opts = (config.options || []).filter((_: any, j: number) => j !== i);
+                      setConfig((c: any) => ({ ...c, options: opts }));
+                      save();
+                    }}
+                    className="shrink-0 text-muted-foreground hover:text-destructive transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+              {(!config.options || config.options.length === 0) && (
+                <p className="text-[10px] text-muted-foreground/60 py-1">
+                  Clique em "+ Adicionar" para criar opções
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Mensagem p/ opção inválida</label>
+            <ConfigField
+              {...fieldProps('invalidMessage')}
+              placeholder="Opção inválida. Tente novamente."
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Max tentativas</label>
+              <ConfigField {...fieldProps('maxAttempts')} type="number" placeholder="3" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Salvar em campo</label>
+              <ConfigField {...fieldProps('saveToField')} placeholder="chave_campo" />
+            </div>
+          </div>
+        </div>
       )}
 
       {node.data.type === 'CONDITION' && (

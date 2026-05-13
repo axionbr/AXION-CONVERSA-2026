@@ -17,7 +17,8 @@
     "db:migrate": "npm run db:migrate --workspace=apps/api",
     "db:seed": "npm run db:seed --workspace=apps/api",
     "db:studio": "npm run db:studio --workspace=apps/api",
-    "db:reset-operational": "tsx apps/api/scripts/reset-operational-data.ts"
+    "db:reset-operational": "tsx apps/api/scripts/reset-operational-data.ts",
+    "test": "npm run test --workspace=apps/api"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
