@@ -14,7 +14,13 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\mario\\\\OneDrive\\\\Área de Trabalho\\\\AXION-CONVERSA-2026\\\\apps\\\\api\\\\src\\\\services\" -File)",
       "Bash(Select-Object Name)",
       "Bash(npx vitest *)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(grep -rn \"FLOW_MSG\\\\|55\\\\${conv\\\\|55\\\\${conversation\\\\|55\\\\${rawPhone\" apps/api/src/ --include=\"*.ts\")",
+      "Bash(grep -Rn \"FLOW_MSG\" apps/api/src apps/api/dist)",
+      "Bash(grep -Rn \"FLOW_SEND_ATTEMPT\" apps/api/src apps/api/dist)",
+      "Bash(grep -Rn \"trust proxy\" apps/api/src apps/api/dist)"
     ]
   }
 }

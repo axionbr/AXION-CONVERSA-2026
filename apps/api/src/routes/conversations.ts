@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { sendTextMessage } from '../services/zapiService';
+import { sendWhatsAppText } from '../services/outboundWhatsAppService';
 import { analyzeConversation } from '../services/aiService';
 import { emitNewMessage, emitConversationUpdate } from '../socket';
 import { triggerFlowsByEvent } from '../services/flowEngine';
@@ -154,14 +154,14 @@ router.post('/:id/send', async (req: AuthRequest, res, next) => {
 
     console.log(`[AGENT] Mensagem salva | id: ${msg.id} | conversa: ${req.params.id} | atendente: ${req.user!.email}`);
 
-    // contact.phone esta sem DDI no DB ("11999..."); Z-API precisa do DDI ("5511999...")
-    const zapiPhone = `55${conv.contact.phone}`;
-    try {
-      await sendTextMessage(zapiPhone, content.trim(), conv.storeId);
-      console.log(`[AGENT] Mensagem enviada via Z-API para ${zapiPhone}`);
-    } catch (e: any) {
-      console.error(`[AGENT] Falha ao enviar Z-API para ${zapiPhone}:`, e.message);
-    }
+    // Envia via serviço central de saída WhatsApp
+    await sendWhatsAppText({
+      conversationId: req.params.id,
+      storeId:        conv.storeId,
+      phone:          conv.contact.phone,
+      text:           content.trim(),
+      source:         'manual',
+    });
 
     const msgPayload = {
       id:             msg.id,

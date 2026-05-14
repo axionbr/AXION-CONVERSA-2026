@@ -41,7 +41,7 @@ exports.acceptHandoff = acceptHandoff;
 exports.checkExpiry = checkExpiry;
 exports.checkExpiredNotifications = checkExpiredNotifications;
 const client_1 = require("@prisma/client");
-const zapiService_1 = require("./zapiService");
+const outboundWhatsAppService_1 = require("./outboundWhatsAppService");
 const socket_1 = require("../socket");
 const prisma = new client_1.PrismaClient();
 // Minutos antes de uma notificação expirar e escalar para o próximo vendedor
@@ -367,9 +367,14 @@ async function initiateHandoff(conversationId, lead, aiSummary) {
         console.log(`[HANDOFF] Região salva no lead | id: ${lead.id} | region: ${region}`);
     }
     // 3. Enviar mensagem de transferência ao cliente pelo número central
-    const rawPhone = `55${conv.contact.phone}`;
-    try {
-        await (0, zapiService_1.sendTextMessage)(rawPhone, exports.HANDOFF_MSG, conv.storeId);
+    const sendResult = await (0, outboundWhatsAppService_1.sendWhatsAppText)({
+        conversationId,
+        storeId: conv.storeId,
+        phone: conv.contact.phone,
+        text: exports.HANDOFF_MSG,
+        source: 'system',
+    });
+    if (sendResult.ok) {
         const sysMsg = await prisma.message.create({
             data: {
                 conversationId,
@@ -390,8 +395,8 @@ async function initiateHandoff(conversationId, lead, aiSummary) {
         });
         console.log(`[HANDOFF] Mensagem de transferência enviada | conv: ${conversationId}`);
     }
-    catch (e) {
-        console.error('[HANDOFF] Falha ao enviar mensagem de transferência:', e.message);
+    else {
+        console.error(`[HANDOFF] Falha ao enviar mensagem de transferência | conv: ${conversationId} | erro: ${sendResult.error}`);
     }
     // 4. Encontrar e notificar vendedor
     const seller = await findBestSeller(conv.storeId, region);

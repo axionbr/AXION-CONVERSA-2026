@@ -19,6 +19,8 @@ const errorHandler_1 = require("./middleware/errorHandler");
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 (0, socket_1.initSocket)(server);
+// Nginx faz proxy reverso — confia no primeiro proxy para rate limit e req.ip corretos
+app.set('trust proxy', 1);
 app.use((0, helmet_1.default)({ crossOriginEmbedderPolicy: false }));
 app.use((0, cors_1.default)({ origin: config_1.config.frontendUrl, credentials: true }));
 // Morgan silenciado em produção para não poluir logs com cada requisição

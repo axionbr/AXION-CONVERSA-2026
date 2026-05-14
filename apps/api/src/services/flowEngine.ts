@@ -203,9 +203,33 @@ async function sendFlowMessage(
   });
 
   if (!testMode) {
-    const zapiPhone = `55${conversation.contact.phone}`;
-    await sendTextMessage(zapiPhone, text.trim(), conversation.storeId).catch(
-      (e: any) => console.error(`[FLOW_MSG] Z-API error:`, e.message),
+    // Normaliza telefone: remove não-dígitos, adiciona 55 apenas se ainda não começar com ele
+    const digits     = conversation.contact.phone.replace(/\D/g, '');
+    const zapiPhone  = digits.startsWith('55') ? digits : `55${digits}`;
+    const masked     = zapiPhone.length > 7
+      ? `${zapiPhone.slice(0, 4)}****${zapiPhone.slice(-3)}`
+      : zapiPhone;
+
+    console.log(`[FLOW_SEND_ATTEMPT] | source: flow | conv: ${conversationId} | phone: ${masked} | node: ${nodeId}`);
+
+    try {
+      const result = await sendTextMessage(zapiPhone, text.trim(), conversation.storeId);
+      console.log(`[FLOW_SEND_OK] | source: flow | conv: ${conversationId} | phone: ${masked}`);
+      void result;
+    } catch (error: any) {
+      console.error('[FLOW_SEND_ERROR]', {
+        source:         'flow',
+        conversationId,
+        phone:          masked,
+        status:         error?.response?.status  ?? null,
+        body:           error?.response?.data     ?? null,
+        message:        error?.message            ?? 'unknown',
+      });
+      throw error;
+    }
+  } else {
+    console.log(
+      `[FLOW_SEND_SKIPPED_TESTMODE] | conv: ${conversationId} | node: ${nodeId} | msg salva no DB — Z-API não chamada`,
     );
   }
 

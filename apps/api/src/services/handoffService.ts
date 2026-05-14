@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { sendTextMessage } from './zapiService';
+import { sendWhatsAppText } from './outboundWhatsAppService';
 import {
   emitConversationUpdate,
   emitNewMessage,
@@ -387,9 +387,15 @@ export async function initiateHandoff(
   }
 
   // 3. Enviar mensagem de transferência ao cliente pelo número central
-  const rawPhone = `55${conv.contact.phone}`;
-  try {
-    await sendTextMessage(rawPhone, HANDOFF_MSG, conv.storeId);
+  const sendResult = await sendWhatsAppText({
+    conversationId,
+    storeId: conv.storeId,
+    phone:   conv.contact.phone,
+    text:    HANDOFF_MSG,
+    source:  'system',
+  });
+
+  if (sendResult.ok) {
     const sysMsg = await prisma.message.create({
       data: {
         conversationId,
@@ -409,8 +415,8 @@ export async function initiateHandoff(
       createdAt:      sysMsg.createdAt.toISOString(),
     });
     console.log(`[HANDOFF] Mensagem de transferência enviada | conv: ${conversationId}`);
-  } catch (e: any) {
-    console.error('[HANDOFF] Falha ao enviar mensagem de transferência:', e.message);
+  } else {
+    console.error(`[HANDOFF] Falha ao enviar mensagem de transferência | conv: ${conversationId} | erro: ${sendResult.error}`);
   }
 
   // 4. Encontrar e notificar vendedor

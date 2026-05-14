@@ -18,6 +18,9 @@ const server = http.createServer(app);
 
 initSocket(server);
 
+// Nginx faz proxy reverso — confia no primeiro proxy para rate limit e req.ip corretos
+app.set('trust proxy', 1);
+
 app.use(helmet({ crossOriginEmbedderPolicy: false }));
 app.use(cors({ origin: config.frontendUrl, credentials: true }));
 // Morgan silenciado em produção para não poluir logs com cada requisição

@@ -14,6 +14,7 @@ import webhookRoutes from './webhooks';
 import flowRoutes from './flows';
 import settingsRoutes from './settings';
 import handoffRoutes from './handoff';
+import debugRoutes from './debug';
 
 const router = Router();
 
@@ -32,5 +33,6 @@ router.use('/webhooks', webhookRoutes);
 router.use('/flows', flowRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/handoff', handoffRoutes);
+router.use('/debug', debugRoutes);
 
 export default router;

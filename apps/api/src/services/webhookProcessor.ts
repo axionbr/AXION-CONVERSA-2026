@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { classifyIntentAndTemperature, generateAiResponse, analyzeConversation, determineAgentStage, LeadContext, AgentType } from './aiService';
-import { sendTextMessage } from './zapiService';
+import { sendWhatsAppText } from './outboundWhatsAppService';
 import { emitNewMessage, emitConversationUpdate, emitNewConversation } from '../socket';
 import { triggerFlowsByEvent, continueExecutionWithResponse, CONVERSATIONAL_EVENTS } from './flowEngine';
 import { initiateHandoff, checkExpiredNotifications } from './handoffService';
@@ -437,14 +437,31 @@ export async function processZapiWebhook(payload: any): Promise<void> {
     // ── PASSO 12 — VERIFICAÇÃO DE PRIORIDADE DE FLUXO ────────────────────────
     // Ordem: 1) continuar fluxo aguardando resposta  2) novo trigger  3) IA fallback
 
-    // ── 12a. Continuar FlowExecution aguardando resposta do cliente ───────────
+    // ── 12a-pre. Cancelar execuções de SANDBOX presas em WAITING_RESPONSE ────────
+    // Uma execução testMode=true não deve interceptar mensagens reais do cliente.
+    // Isso acontece quando alguém inicia um teste via API passando o conversationId
+    // real, ou quando uma sessão de sandbox não foi encerrada corretamente.
+    const stuckTestExecs = await prisma.flowExecution.findMany({
+      where:  { conversationId: conversation.id, status: 'WAITING_RESPONSE', testMode: true },
+      select: { id: true },
+    });
+    if (stuckTestExecs.length > 0) {
+      await prisma.flowExecution.updateMany({
+        where: { id: { in: stuckTestExecs.map(e => e.id) } },
+        data:  { status: 'FAILED', error: 'Cancelado — mensagem real recebida enquanto execução de teste aguardava resposta', finishedAt: new Date() },
+      });
+      console.warn(`[FLOW_TEST_EXEC_CANCELLED] | ${stuckTestExecs.length} execução(ões) de teste cancelada(s) | conv: ${conversation.id}`);
+    }
+
+    // ── 12a. Continuar FlowExecution REAL aguardando resposta do cliente ─────────
+    // Filtra explicitamente testMode=false para nunca retomar fluxos de sandbox.
     const waitingExecution = await prisma.flowExecution.findFirst({
-      where: { conversationId: conversation.id, status: 'WAITING_RESPONSE' },
+      where: { conversationId: conversation.id, status: 'WAITING_RESPONSE', testMode: false },
       orderBy: { startedAt: 'desc' },
     });
 
     if (waitingExecution) {
-      console.log(`[FLOW_CONTINUE] | execution: ${waitingExecution.id} | conv: ${conversation.id}`);
+      console.log(`[FLOW_CONTINUE] | execution: ${waitingExecution.id} | conv: ${conversation.id} | testMode: false`);
       await prisma.automationLog.create({
         data: {
           type:           'FLOW_CONTINUED',
@@ -696,12 +713,17 @@ export async function processZapiWebhook(payload: any): Promise<void> {
       },
     });
 
-    // ── PASSO 16 — Enviar via Z-API (usa rawPhone com DDI "55") ───────────────
-    let zapiSent = false;
-    try {
-      await sendTextMessage(rawPhone, aiReply, conversation.storeId);
-      zapiSent = true;
-      console.log(`${L.AI_SND} | via Z-API | para: ${rawPhone} | conv: ${conversation.id}`);
+    // ── PASSO 16 — Enviar via serviço central de saída WhatsApp ─────────────────
+    const sendResult = await sendWhatsAppText({
+      conversationId: conversation.id,
+      storeId:        conversation.storeId,
+      phone:          rawPhone,
+      text:           aiReply,
+      source:         'ai',
+    });
+    const zapiSent = sendResult.ok;
+    if (zapiSent) {
+      console.log(`${L.AI_SND} | via Z-API | conv: ${conversation.id}`);
       await prisma.automationLog.create({
         data: {
           type:           'IA_RESPONSE_SENT',
@@ -710,9 +732,6 @@ export async function processZapiWebhook(payload: any): Promise<void> {
           leadId:         lead.id,
         },
       }).catch(() => {});
-    } catch (zapErr: any) {
-      console.error(`[ZAPI] | falha ao enviar IA | para: ${rawPhone} |`, zapErr.message);
-      // Não bloqueia — mensagem já foi salva no banco
     }
 
     // ── PASSO 17 — Emitir resposta da IA em tempo real ────────────────────────

@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.processZapiWebhook = processZapiWebhook;
 const client_1 = require("@prisma/client");
 const aiService_1 = require("./aiService");
-const zapiService_1 = require("./zapiService");
+const outboundWhatsAppService_1 = require("./outboundWhatsAppService");
 const socket_1 = require("../socket");
 const flowEngine_1 = require("./flowEngine");
 const handoffService_1 = require("./handoffService");
@@ -78,6 +78,28 @@ function extractPayload(payload) {
         console.log(`${L.OUT} | sem telefone | ignorado`);
         return null;
     }
+    // ── Localização compartilhada pelo cliente via WhatsApp ──────────────────────
+    // Z-API envia: { location: { latitude, longitude, name, address } }
+    if (payload.location && (payload.location.latitude || payload.location.longitude)) {
+        const loc = payload.location;
+        const locName = loc.name || loc.address || `${loc.latitude},${loc.longitude}`;
+        const locText = `📍 Localização: ${locName}`;
+        const rawPhone = rawPhoneStr.replace(/\D/g, '');
+        const normalizedPhone = rawPhone.replace(/^55/, '');
+        if (normalizedPhone.length < 10) {
+            console.log(`${L.OUT} | localização | telefone inválido | ignorado`);
+            return null;
+        }
+        return {
+            normalizedPhone,
+            rawPhone,
+            content: locText,
+            messageId: payload.messageId || payload.id,
+            senderName: payload.senderName || payload.pushName || normalizedPhone,
+            // campo extra para identificar como localização e atualizar lead.region
+            ...(loc.name || loc.address ? { _locationRegion: loc.name || loc.address } : {}),
+        };
+    }
     // Extrai conteúdo — tenta todas as variações conhecidas do payload Z-API
     const content = (payload.text?.message ||
         payload.body ||
@@ -111,6 +133,7 @@ async function processZapiWebhook(payload) {
         if (!extracted)
             return; // razão já logada dentro de extractPayload
         const { normalizedPhone, rawPhone, content, messageId, senderName } = extracted;
+        const locationRegion = extracted._locationRegion;
         console.log(`${L.RCV} | de: ${normalizedPhone} | msgId: ${messageId ?? 'sem-id'} | "${content.substring(0, 80)}"`);
         // ── PASSO 1 — Deduplicação primária (por messageId, antes de criar registros) ──
         if (messageId) {
@@ -278,6 +301,14 @@ async function processZapiWebhook(payload) {
                 unreadCount: (conversation.unreadCount ?? 0) + 1,
             });
         }
+        // ── PASSO 8.5 — Geolocalização: se payload tinha location, atualiza lead.region ──
+        if (locationRegion && !lead.region) {
+            await prisma.lead.update({
+                where: { id: lead.id },
+                data: { region: locationRegion },
+            }).catch(() => { });
+            console.log(`[GEO_LOCATION] | lead: ${lead.id} | região atualizada: ${locationRegion}`);
+        }
         // ── PASSO 9 — Classificação de intenção (local, nunca falha) ──────────────
         const classification = await (0, aiService_1.classifyIntentAndTemperature)(content);
         const prevTemperature = lead.temperature;
@@ -343,8 +374,41 @@ async function processZapiWebhook(payload) {
             },
         });
         // ── PASSO 12 — VERIFICAÇÃO DE PRIORIDADE DE FLUXO ────────────────────────
-        // Regra: se existe fluxo ativo que responde a esta mensagem, ELE tem prioridade.
-        // A IA autônoma só age como fallback quando nenhum fluxo conversacional está ativo.
+        // Ordem: 1) continuar fluxo aguardando resposta  2) novo trigger  3) IA fallback
+        // ── 12a-pre. Cancelar execuções de SANDBOX presas em WAITING_RESPONSE ────────
+        // Uma execução testMode=true não deve interceptar mensagens reais do cliente.
+        // Isso acontece quando alguém inicia um teste via API passando o conversationId
+        // real, ou quando uma sessão de sandbox não foi encerrada corretamente.
+        const stuckTestExecs = await prisma.flowExecution.findMany({
+            where: { conversationId: conversation.id, status: 'WAITING_RESPONSE', testMode: true },
+            select: { id: true },
+        });
+        if (stuckTestExecs.length > 0) {
+            await prisma.flowExecution.updateMany({
+                where: { id: { in: stuckTestExecs.map(e => e.id) } },
+                data: { status: 'FAILED', error: 'Cancelado — mensagem real recebida enquanto execução de teste aguardava resposta', finishedAt: new Date() },
+            });
+            console.warn(`[FLOW_TEST_EXEC_CANCELLED] | ${stuckTestExecs.length} execução(ões) de teste cancelada(s) | conv: ${conversation.id}`);
+        }
+        // ── 12a. Continuar FlowExecution REAL aguardando resposta do cliente ─────────
+        // Filtra explicitamente testMode=false para nunca retomar fluxos de sandbox.
+        const waitingExecution = await prisma.flowExecution.findFirst({
+            where: { conversationId: conversation.id, status: 'WAITING_RESPONSE', testMode: false },
+            orderBy: { startedAt: 'desc' },
+        });
+        if (waitingExecution) {
+            console.log(`[FLOW_CONTINUE] | execution: ${waitingExecution.id} | conv: ${conversation.id} | testMode: false`);
+            await prisma.automationLog.create({
+                data: {
+                    type: 'FLOW_CONTINUED',
+                    description: `Fluxo continuado com resposta do cliente (execução: ${waitingExecution.id})`,
+                    conversationId: conversation.id,
+                    leadId: lead.id,
+                },
+            }).catch(() => { });
+            await (0, flowEngine_1.continueExecutionWithResponse)(waitingExecution.id, content);
+            return; // Fluxo gerencia o atendimento — IA não deve responder
+        }
         console.log(`[FLOW_PRIORITY_CHECK] | conv: ${conversation.id} | lead: ${lead.id}`);
         await prisma.automationLog.create({
             data: {
@@ -560,12 +624,17 @@ async function processZapiWebhook(payload) {
                 senderType: 'AI',
             },
         });
-        // ── PASSO 16 — Enviar via Z-API (usa rawPhone com DDI "55") ───────────────
-        let zapiSent = false;
-        try {
-            await (0, zapiService_1.sendTextMessage)(rawPhone, aiReply, conversation.storeId);
-            zapiSent = true;
-            console.log(`${L.AI_SND} | via Z-API | para: ${rawPhone} | conv: ${conversation.id}`);
+        // ── PASSO 16 — Enviar via serviço central de saída WhatsApp ─────────────────
+        const sendResult = await (0, outboundWhatsAppService_1.sendWhatsAppText)({
+            conversationId: conversation.id,
+            storeId: conversation.storeId,
+            phone: rawPhone,
+            text: aiReply,
+            source: 'ai',
+        });
+        const zapiSent = sendResult.ok;
+        if (zapiSent) {
+            console.log(`${L.AI_SND} | via Z-API | conv: ${conversation.id}`);
             await prisma.automationLog.create({
                 data: {
                     type: 'IA_RESPONSE_SENT',
@@ -574,10 +643,6 @@ async function processZapiWebhook(payload) {
                     leadId: lead.id,
                 },
             }).catch(() => { });
-        }
-        catch (zapErr) {
-            console.error(`[ZAPI] | falha ao enviar IA | para: ${rawPhone} |`, zapErr.message);
-            // Não bloqueia — mensagem já foi salva no banco
         }
         // ── PASSO 17 — Emitir resposta da IA em tempo real ────────────────────────
         (0, socket_1.emitNewMessage)(conversation.id, {

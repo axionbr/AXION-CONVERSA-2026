@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const auth_1 = require("../middleware/auth");
-const zapiService_1 = require("../services/zapiService");
+const outboundWhatsAppService_1 = require("../services/outboundWhatsAppService");
 const aiService_1 = require("../services/aiService");
 const socket_1 = require("../socket");
 const flowEngine_1 = require("../services/flowEngine");
@@ -151,15 +151,14 @@ router.post('/:id/send', async (req, res, next) => {
             data: { lastMessageAt: new Date() },
         });
         console.log(`[AGENT] Mensagem salva | id: ${msg.id} | conversa: ${req.params.id} | atendente: ${req.user.email}`);
-        // contact.phone esta sem DDI no DB ("11999..."); Z-API precisa do DDI ("5511999...")
-        const zapiPhone = `55${conv.contact.phone}`;
-        try {
-            await (0, zapiService_1.sendTextMessage)(zapiPhone, content.trim(), conv.storeId);
-            console.log(`[AGENT] Mensagem enviada via Z-API para ${zapiPhone}`);
-        }
-        catch (e) {
-            console.error(`[AGENT] Falha ao enviar Z-API para ${zapiPhone}:`, e.message);
-        }
+        // Envia via serviço central de saída WhatsApp
+        await (0, outboundWhatsAppService_1.sendWhatsAppText)({
+            conversationId: req.params.id,
+            storeId: conv.storeId,
+            phone: conv.contact.phone,
+            text: content.trim(),
+            source: 'manual',
+        });
         const msgPayload = {
             id: msg.id,
             conversationId: req.params.id,

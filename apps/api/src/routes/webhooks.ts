@@ -5,7 +5,8 @@ import { processZapiWebhook } from '../services/webhookProcessor';
 const router = Router();
 
 // ─── Validação do secret do webhook ──────────────────────────────────────────
-// Z-API suporta 4 formas de enviar o secret: header, query ou body
+// Z-API suporta 4 formas de enviar o secret: header x-webhook-secret,
+// header x-zapi-secret, query param ?secret= ou body.secret
 function validateSecret(req: Request): boolean {
   const { webhookSecret, nodeEnv } = config;
 
@@ -18,7 +19,15 @@ function validateSecret(req: Request): boolean {
     (req.query?.secret               as string) ||
     (req.body?.secret                as string);
 
-  return candidate === webhookSecret;
+  const valid = candidate === webhookSecret;
+
+  if (valid) {
+    console.log(`[WEBHOOK_SECRET_OK] | IP: ${req.ip} | path: ${req.path}`);
+  } else {
+    console.warn(`[WEBHOOK_SECRET_INVALID] | IP: ${req.ip} | path: ${req.path} | candidate presente: ${!!candidate}`);
+  }
+
+  return valid;
 }
 
 // ─── Handler principal (idempotente: responde 200 e processa async) ───────────
